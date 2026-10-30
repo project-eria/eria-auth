@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/project-eria/go-wot/auth"
 	"github.com/project-eria/go-wot/auth/authz"
 )
 
@@ -91,6 +92,56 @@ func (s *Service) Handler() http.Handler {
 		return s.AdminSession(in.Request, in.Proof, isOut(r))
 	}))
 
+	// Names for the sign-in screen: never levels nor the admin.
+	mux.HandleFunc("GET /v1/profiles/names", func(w http.ResponseWriter, r *http.Request) {
+		list, err := s.Profiles()
+		names := []Profile{}
+		for _, p := range list {
+			if p.Level > 0 {
+				names = append(names, Profile{ID: p.ID, Name: p.Name})
+			}
+		}
+		reply(w, names, err)
+	})
+
+	// The interfaces' configuration: read by the relays (nothing secret in
+	// it), changed by the people allowed to.
+	mux.HandleFunc("GET /v1/config", func(w http.ResponseWriter, r *http.Request) {
+		if since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64); since > 0 && since >= s.configVersion() {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		c, err := s.Config()
+		reply(w, c, err)
+	})
+	// Pages: level ≤ 1 and a signed-in person, never a terminal token, inner
+	// relay only (§3.6); or the admin.
+	pageEditor := func(h http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			c, err := s.authenticate(bearer(r), authz.Relay)
+			person := err == nil && c.Profile == auth.ProfilePerson && *c.Lvl <= 1
+			if _, err := s.asAdmin(bearer(r)); (err != nil && !person) || isOut(r) {
+				reply(w, nil, ErrDenied)
+				return
+			}
+			h(w, r)
+		}
+	}
+	mux.HandleFunc("POST /v1/pages", pageEditor(handle(func(r *http.Request, in Page) (any, error) {
+		return s.SavePage(in)
+	})))
+	mux.HandleFunc("DELETE /v1/pages/{id}", pageEditor(func(w http.ResponseWriter, r *http.Request) {
+		reply(w, nil, s.DeletePage(r.PathValue("id")))
+	}))
+	// The screen the app deduced, on any token of the terminal itself.
+	mux.HandleFunc("POST /v1/screen", handle(func(r *http.Request, in struct{ Screen string }) (any, error) {
+		c, err := s.authenticate(bearer(r), authz.Relay)
+		if err != nil {
+			return nil, err
+		}
+		return nil, s.ReportScreen(c.Term, in.Screen)
+	}))
+
 	// The revocation list is public and signed: relays fetch it.
 	mux.HandleFunc("GET /v1/revocations", func(w http.ResponseWriter, r *http.Request) {
 		doc, err := s.RevocationDoc()
@@ -160,6 +211,27 @@ func (s *Service) Handler() http.Handler {
 			reply(w, nil, op(r.PathValue("id")))
 		}))
 	}
+	mux.HandleFunc("PATCH /v1/terminals/{id}/screen", admin(handle(func(r *http.Request, in struct {
+		Screen   string
+		HomePage string
+	}) (any, error) {
+		return nil, s.SetScreen(r.PathValue("id"), in.Screen, in.HomePage)
+	})))
+	mux.HandleFunc("PUT /v1/config/home-page", admin(handle(func(r *http.Request, in struct{ Page string }) (any, error) {
+		return nil, s.SetHomePage(in.Page)
+	})))
+	mux.HandleFunc("PUT /v1/config/contexts", admin(handle(func(r *http.Request, in []Context) (any, error) {
+		return nil, s.SetContexts(in)
+	})))
+	mux.HandleFunc("PUT /v1/config/hidden", admin(handle(func(r *http.Request, in []string) (any, error) {
+		return nil, s.SetHidden(in)
+	})))
+	mux.HandleFunc("POST /v1/config/manual", admin(handle(func(r *http.Request, in ManualThing) (any, error) {
+		return nil, s.AddManual(in)
+	})))
+	mux.HandleFunc("DELETE /v1/config/manual/{id}", admin(func(w http.ResponseWriter, r *http.Request) {
+		reply(w, nil, s.RemoveManual(r.PathValue("id")))
+	}))
 	mux.HandleFunc("POST /v1/terminals/{id}/enrollment", admin(func(w http.ResponseWriter, r *http.Request) {
 		e, err := s.NewEnrollment(r.PathValue("id"))
 		reply(w, e, err)

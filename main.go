@@ -25,7 +25,7 @@ import (
 	zlog "github.com/rs/zerolog/log"
 )
 
-type Config struct {
+type AppConfig struct {
 	Database   string `yaml:"database" default:"eria-auth.db"`
 	KeyFile    string `yaml:"keyFile" default:"auth-ed25519.key"` // signing key, made by `eria-auth bootstrap`
 	Deployment string `yaml:"deployment" required:"true"`         // aud of the tokens: id of the house
@@ -38,9 +38,12 @@ type Config struct {
 	// key of its backup key (eria-manager auth-secrets).
 	BackupURL       string `yaml:"backupURL" required:"true"`
 	BackupRecipient string `yaml:"backupRecipient" required:"true"`
+	// First values only, copied at the first start, then edited by the admin.
+	Contexts []Context `yaml:"contexts,omitempty"` // contexts offered to people, in display order
+	Hide     []string  `yaml:"hide,omitempty"`     // glob patterns on TD ids of the Things never shown
 }
 
-var config Config
+var config AppConfig
 
 func main() {
 	if len(os.Args) > 1 {
@@ -78,6 +81,9 @@ func main() {
 	}
 	svc := NewService(store, pepper, key, config.Deployment)
 	svc.notify = ntfy(config.Ntfy)
+	if err := svc.SeedConfig(config.Contexts, config.Hide); err != nil {
+		zlog.Fatal().Err(err).Msg("[main] Can't store the first settings")
+	}
 	if err := svc.CheckClock(); err != nil {
 		zlog.Fatal().Err(err).Msg("[main] Clock behind the last version issued")
 	}
@@ -118,9 +124,9 @@ var commands = map[string]func(args []string, out io.Writer) error{
 	"csr":         cmdCSR,
 }
 
-func commandFlags(name string) (*flag.FlagSet, *Config) {
+func commandFlags(name string) (*flag.FlagSet, *AppConfig) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	c := &Config{}
+	c := &AppConfig{}
 	fs.StringVar(&c.Database, "database", "eria-auth.db", "SQLite file")
 	fs.StringVar(&c.KeyFile, "key-file", "auth-ed25519.key", "signing key file")
 	fs.StringVar(&c.CertKey, "cert-key", "auth-tls.key", "TLS private key file")

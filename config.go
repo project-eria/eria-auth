@@ -1,0 +1,448 @@
+package main
+
+import (
+	"crypto/rand"
+	"database/sql"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"path"
+	"slices"
+	"strings"
+)
+
+// The configuration of the interfaces (AUTH-DESIGN §3.6, op config): pages,
+// start pages, contexts offered, hidden Things, Things added by address, and
+// the screen of each terminal. Kept by auth with its state; the relays only
+// serve it. Moved from eria-ui-server, whose pages they were.
+
+func (s *Store) migrateConfig() error {
+	_, err := s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS pages (
+			id       TEXT PRIMARY KEY,
+			title    TEXT NOT NULL,
+			theme    TEXT NOT NULL DEFAULT '',
+			aspect   TEXT NOT NULL DEFAULT '',
+			layout   TEXT NOT NULL DEFAULT '',
+			version  INTEGER NOT NULL,
+			elements TEXT NOT NULL,
+			options  TEXT NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS contexts (
+			id       TEXT PRIMARY KEY,
+			label    TEXT NOT NULL,
+			position INTEGER NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS hidden (pattern TEXT PRIMARY KEY);
+		CREATE TABLE IF NOT EXISTS manual_things (id TEXT PRIMARY KEY, url TEXT NOT NULL);
+		CREATE TABLE IF NOT EXISTS options (key TEXT PRIMARY KEY, value TEXT NOT NULL);`)
+	if err != nil {
+		return err
+	}
+	// The screen of a terminal (watch, phone, tablet…), apart from its kind.
+	for _, column := range []string{"screen", "detected_screen", "home_page"} {
+		var n int
+		s.db.QueryRow(`SELECT count(*) FROM pragma_table_info('terminals') WHERE name = ?`, column).Scan(&n)
+		if n == 0 {
+			if _, err := s.db.Exec(`ALTER TABLE terminals ADD COLUMN ` + column + ` TEXT NOT NULL DEFAULT ''`); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// configChanged bumps the version the relays poll.
+func (s *Service) configChanged(event, detail string) {
+	s.store.db.Exec(`INSERT INTO state (key, value) VALUES ('config', ?)
+		ON CONFLICT (key) DO UPDATE SET value = max(value + 1, excluded.value)`, s.now().UnixMilli())
+	s.store.log(event, detail)
+}
+
+func (s *Service) configVersion() int64 {
+	v := int64(1)
+	s.store.db.QueryRow(`SELECT value FROM state WHERE key = 'config'`).Scan(&v)
+	return v
+}
+
+// --- Pages (eria-ui-app PLAN §5.000) ---
+
+type Page struct {
+	ID       string          `json:"id"`
+	Title    string          `json:"title"`
+	Theme    string          `json:"theme"`   // "" = Base; fixed at creation
+	Aspect   string          `json:"aspect"`  // fixed at creation
+	Layout   string          `json:"layout"`  // fixed at creation
+	Version  int             `json:"version"` // +1 at each save, checked against conflicts
+	Elements []Element       `json:"elements"`
+	Options  json.RawMessage `json:"options"`
+}
+
+// Element is one function of a page; its fields depend on its type.
+type Element struct {
+	ID         string          `json:"id"`
+	Type       string          `json:"type"` // service | property | action | event | app
+	Thing      string          `json:"thing,omitempty"`
+	Capability string          `json:"capability,omitempty"`
+	Name       string          `json:"name,omitempty"`
+	Input      json.RawMessage `json:"input,omitempty"`
+	Label      string          `json:"label,omitempty"`
+	Hidden     bool            `json:"hidden,omitempty"`
+	Widget     string          `json:"widget,omitempty"`
+	Options    json.RawMessage `json:"options,omitempty"`
+}
+
+const (
+	maxElements  = 200
+	maxPageTitle = 100
+)
+
+var errPageStale = Invalid("this page was changed meanwhile: reload it")
+
+func validPage(p Page) error {
+	if t := strings.TrimSpace(p.Title); t == "" || len(t) > maxPageTitle {
+		return Invalid("a title is needed (100 characters at most)")
+	}
+	if len(p.Elements) > maxElements {
+		return Invalid("too many elements")
+	}
+	if !isObject(p.Options) {
+		return Invalid("options must be an object")
+	}
+	ids := map[string]bool{}
+	for _, e := range p.Elements {
+		ok := e.ID != "" && !ids[e.ID] && isObject(e.Options) && (len(e.Input) == 0 || json.Valid(e.Input))
+		ids[e.ID] = true
+		switch e.Type {
+		case "service":
+			ok = ok && e.Thing != "" && e.Capability != ""
+		case "property", "action", "event":
+			ok = ok && e.Thing != "" && e.Name != ""
+		case "app":
+			ok = ok && e.Name != ""
+		default:
+			ok = false
+		}
+		if !ok {
+			return Invalid(fmt.Sprintf("invalid element %q", e.ID))
+		}
+	}
+	return nil
+}
+
+// isObject accepts a JSON object, or nothing (absent or null).
+func isObject(raw json.RawMessage) bool {
+	var v map[string]json.RawMessage
+	return len(raw) == 0 || string(raw) == "null" || json.Unmarshal(raw, &v) == nil && v != nil
+}
+
+const pageColumns = `id, title, theme, aspect, layout, version, elements, options`
+
+func scanPage(row interface{ Scan(...any) error }) (Page, error) {
+	var p Page
+	var elements, options string
+	if err := row.Scan(&p.ID, &p.Title, &p.Theme, &p.Aspect, &p.Layout, &p.Version, &elements, &options); err != nil {
+		return p, err
+	}
+	json.Unmarshal([]byte(elements), &p.Elements)
+	p.Options = json.RawMessage(options)
+	return p, nil
+}
+
+func (s *Service) page(id string) (Page, error) {
+	p, err := scanPage(s.store.db.QueryRow(`SELECT `+pageColumns+` FROM pages WHERE id = ?`, id))
+	if err != nil {
+		return Page{}, ErrNotFound
+	}
+	return p, nil
+}
+
+func (s *Service) pages() ([]Page, error) {
+	rows, err := s.store.db.Query(`SELECT ` + pageColumns + ` FROM pages ORDER BY title`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	list := []Page{}
+	for rows.Next() {
+		p, err := scanPage(rows)
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, p)
+	}
+	return list, rows.Err()
+}
+
+// SavePage creates a page (empty id) or updates it (same version as stored;
+// theme, aspect and layout kept as created).
+func (s *Service) SavePage(in Page) (Page, error) {
+	if err := validPage(in); err != nil {
+		return Page{}, err
+	}
+	if in.Elements == nil {
+		in.Elements = []Element{}
+	}
+	if len(in.Options) == 0 || string(in.Options) == "null" {
+		in.Options = json.RawMessage("{}")
+	}
+	elements, _ := json.Marshal(in.Elements)
+	title := strings.TrimSpace(in.Title)
+	if in.ID == "" {
+		raw := make([]byte, 10)
+		rand.Read(raw)
+		in.ID = strings.ToLower(base64.RawURLEncoding.EncodeToString(raw))
+		_, err := s.store.db.Exec(`INSERT INTO pages (id, title, theme, aspect, layout, version, elements, options)
+			VALUES (?, ?, ?, ?, ?, 1, ?, ?)`, in.ID, title, in.Theme, in.Aspect, in.Layout, string(elements), string(in.Options))
+		if err != nil {
+			return Page{}, err
+		}
+		s.configChanged("page.create", in.ID)
+		return s.page(in.ID)
+	}
+	stored, err := s.page(in.ID)
+	switch {
+	case err != nil:
+		return Page{}, err
+	case stored.Version != in.Version:
+		return Page{}, errPageStale
+	case in.Theme != stored.Theme || in.Aspect != stored.Aspect || in.Layout != stored.Layout:
+		return Page{}, Invalid("theme, aspect and layout are fixed at creation")
+	}
+	res, err := s.store.db.Exec(`UPDATE pages SET title = ?, version = version + 1, elements = ?, options = ?
+		WHERE id = ? AND version = ?`, title, string(elements), string(in.Options), in.ID, in.Version)
+	if err != nil {
+		return Page{}, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return Page{}, errPageStale
+	}
+	s.configChanged("page.update", in.ID)
+	return s.page(in.ID)
+}
+
+func (s *Service) DeletePage(id string) error {
+	res, err := s.store.db.Exec(`DELETE FROM pages WHERE id = ?`, id)
+	if n, _ := res.RowsAffected(); err != nil || n == 0 {
+		return ErrNotFound
+	}
+	s.configChanged("page.delete", id)
+	return nil
+}
+
+// knownPage accepts "" (no choice) or an existing page.
+func (s *Service) knownPage(id string) error {
+	if id == "" {
+		return nil
+	}
+	if _, err := s.page(id); err != nil {
+		return Invalid("unknown page")
+	}
+	return nil
+}
+
+// --- Settings ---
+
+type Context struct {
+	ID    string `json:"id" yaml:"id"`
+	Label string `json:"label" yaml:"label"`
+}
+
+type ManualThing struct {
+	ID  string `json:"id"`
+	URL string `json:"url"`
+}
+
+// TerminalScreen is what the interfaces need of a terminal.
+type TerminalScreen struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Screen         string `json:"screen"`         // "" = detected
+	DetectedScreen string `json:"detectedScreen"` // reported by the app
+	HomePage       string `json:"homePage"`       // "" = the house's start page
+}
+
+// Screens are the sizes of terminal, smallest to largest (PLAN §5.4).
+var screens = []string{"watch", "phone", "tablet", "wall-tablet", "desktop", "tv"}
+
+// InterfaceConfig is the whole configuration, read by the relays.
+type InterfaceConfig struct {
+	Version   int64            `json:"version"`
+	Pages     []Page           `json:"pages"`
+	HomePage  string           `json:"homePage"`
+	Contexts  []Context        `json:"contexts"`
+	Hidden    []string         `json:"hidden"`
+	Manual    []ManualThing    `json:"manual"`
+	Terminals []TerminalScreen `json:"terminals"`
+}
+
+func (s *Service) Config() (InterfaceConfig, error) {
+	c := InterfaceConfig{Version: s.configVersion(), Contexts: []Context{}, Hidden: []string{}, Manual: []ManualThing{},
+		Terminals: []TerminalScreen{}}
+	var err error
+	if c.Pages, err = s.pages(); err != nil {
+		return c, err
+	}
+	s.store.db.QueryRow(`SELECT value FROM options WHERE key = 'homePage'`).Scan(&c.HomePage)
+	query := func(q string, scan func(*sql.Rows)) error {
+		rows, err := s.store.db.Query(q)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			scan(rows)
+		}
+		return rows.Err()
+	}
+	return c, errors.Join(
+		query(`SELECT id, label FROM contexts ORDER BY position`, func(r *sql.Rows) {
+			var x Context
+			r.Scan(&x.ID, &x.Label)
+			c.Contexts = append(c.Contexts, x)
+		}),
+		query(`SELECT pattern FROM hidden ORDER BY pattern`, func(r *sql.Rows) {
+			var p string
+			r.Scan(&p)
+			c.Hidden = append(c.Hidden, p)
+		}),
+		query(`SELECT id, url FROM manual_things ORDER BY id`, func(r *sql.Rows) {
+			var m ManualThing
+			r.Scan(&m.ID, &m.URL)
+			c.Manual = append(c.Manual, m)
+		}),
+		query(`SELECT id, name, screen, detected_screen, home_page FROM terminals WHERE status = 'active' ORDER BY name`, func(r *sql.Rows) {
+			var t TerminalScreen
+			r.Scan(&t.ID, &t.Name, &t.Screen, &t.DetectedScreen, &t.HomePage)
+			c.Terminals = append(c.Terminals, t)
+		}))
+}
+
+func (s *Service) SetHomePage(id string) error {
+	if err := s.knownPage(id); err != nil {
+		return err
+	}
+	s.store.db.Exec(`INSERT INTO options (key, value) VALUES ('homePage', ?)
+		ON CONFLICT (key) DO UPDATE SET value = excluded.value`, id)
+	s.configChanged("config.homePage", id)
+	return nil
+}
+
+// SetContexts replaces the list, in display order.
+func (s *Service) SetContexts(list []Context) error {
+	seen := map[string]bool{}
+	for _, c := range list {
+		if strings.TrimSpace(c.ID) == "" || strings.TrimSpace(c.Label) == "" || seen[c.ID] {
+			return Invalid("each context needs a unique id and a label")
+		}
+		seen[c.ID] = true
+	}
+	tx, err := s.store.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	tx.Exec(`DELETE FROM contexts`)
+	for i, c := range list {
+		if _, err := tx.Exec(`INSERT INTO contexts (id, label, position) VALUES (?, ?, ?)`, c.ID, strings.TrimSpace(c.Label), i); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.configChanged("config.contexts", "")
+	return nil
+}
+
+// SetHidden replaces the glob patterns of the Things never shown.
+func (s *Service) SetHidden(patterns []string) error {
+	for _, p := range patterns {
+		if _, err := path.Match(p, ""); err != nil || p == "" {
+			return Invalid("bad pattern " + p)
+		}
+	}
+	tx, err := s.store.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	tx.Exec(`DELETE FROM hidden`)
+	for _, p := range patterns {
+		tx.Exec(`INSERT OR IGNORE INTO hidden (pattern) VALUES (?)`, p)
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.configChanged("config.hidden", "")
+	return nil
+}
+
+func (s *Service) AddManual(m ManualThing) error {
+	if m.ID == "" || !strings.HasPrefix(m.URL, "http") || len(m.URL) > 512 {
+		return ErrInvalid
+	}
+	s.store.db.Exec(`INSERT INTO manual_things (id, url) VALUES (?, ?)
+		ON CONFLICT (id) DO UPDATE SET url = excluded.url`, m.ID, m.URL)
+	s.configChanged("config.manual.add", m.ID)
+	return nil
+}
+
+func (s *Service) RemoveManual(id string) error {
+	res, _ := s.store.db.Exec(`DELETE FROM manual_things WHERE id = ?`, id)
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	s.configChanged("config.manual.remove", id)
+	return nil
+}
+
+// SetScreen is the admin's choice of screen and start page for a terminal.
+func (s *Service) SetScreen(id string, screen, homePage string) error {
+	if screen != "" && !slices.Contains(screens, screen) {
+		return Invalid("unknown screen")
+	}
+	if err := s.knownPage(homePage); err != nil {
+		return err
+	}
+	res, _ := s.store.db.Exec(`UPDATE terminals SET screen = ?, home_page = ? WHERE id = ?`, screen, homePage, id)
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	s.configChanged("terminal.screen", id)
+	return nil
+}
+
+// ReportScreen records the screen the app deduced, on its own token.
+func (s *Service) ReportScreen(term, detected string) error {
+	if !slices.Contains(screens, detected) {
+		return ErrInvalid
+	}
+	var old string
+	s.store.db.QueryRow(`SELECT detected_screen FROM terminals WHERE id = ?`, term).Scan(&old)
+	if old == detected {
+		return nil
+	}
+	s.store.db.Exec(`UPDATE terminals SET detected_screen = ? WHERE id = ?`, detected, term)
+	s.configChanged("terminal.detected", term)
+	return nil
+}
+
+// SeedConfig copies the first contexts and hidden patterns of the config
+// file, once.
+func (s *Service) SeedConfig(contexts []Context, hidden []string) error {
+	var n int
+	s.store.db.QueryRow(`SELECT count(*) FROM options WHERE key = 'seeded'`).Scan(&n)
+	if n > 0 {
+		return nil
+	}
+	if err := s.SetContexts(contexts); err != nil {
+		return err
+	}
+	if err := s.SetHidden(hidden); err != nil {
+		return err
+	}
+	_, err := s.store.db.Exec(`INSERT INTO options (key, value) VALUES ('seeded', '1')`)
+	return err
+}

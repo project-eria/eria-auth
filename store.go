@@ -98,7 +98,11 @@ func OpenStore(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Store{db: db, now: time.Now, changed: func() {}}, nil
+	st := &Store{db: db, now: time.Now, changed: func() {}}
+	if err := st.migrateConfig(); err != nil {
+		return nil, err
+	}
+	return st, nil
 }
 
 // log adds a journal line after a change of the state, and asks for a
