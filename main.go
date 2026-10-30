@@ -46,6 +46,14 @@ type AppConfig struct {
 var config AppConfig
 
 func main() {
+	// The agent gives the app a data folder: the default file names live
+	// there, for the local commands too.
+	if dir := os.Getenv("ERIA_AUTH_DATA"); dir != "" {
+		if err := os.Chdir(dir); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
 	if len(os.Args) > 1 {
 		if run, ok := commands[os.Args[1]]; ok {
 			if err := run(os.Args[2:], os.Stdout); err != nil {
@@ -56,13 +64,6 @@ func main() {
 		}
 	}
 
-	// The agent gives the app a data folder: the default file names live there.
-	if dir := os.Getenv("ERIA_AUTH_DATA"); dir != "" {
-		if err := os.Chdir(dir); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-	}
 	eria.Init("ERIA auth", &config)
 	defer eria.Close()
 
