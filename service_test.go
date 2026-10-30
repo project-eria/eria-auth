@@ -1,0 +1,251 @@
+package main
+
+import (
+	"bytes"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/project-eria/go-wot/auth"
+	"github.com/project-eria/go-wot/auth/authz"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// signerKey is a terminal or validator key held by a test app.
+type signerKey struct {
+	in   KeyIn
+	kid  string
+	sign func(msg []byte) []byte
+}
+
+func edKey(t *testing.T) signerKey {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	k, err := auth.ParsePublicKey(auth.Ed25519, pub)
+	require.NoError(t, err)
+	return signerKey{KeyIn{"ed25519", pub}, k.KID(), func(m []byte) []byte { return ed25519.Sign(priv, m) }}
+}
+
+// p256Key signs like the Secure Enclave or a YubiKey, converted to r ‖ s.
+func p256Key(t *testing.T) signerKey {
+	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	raw, _ := priv.PublicKey.Bytes()
+	k, err := auth.ParsePublicKey(auth.P256, raw)
+	require.NoError(t, err)
+	return signerKey{KeyIn{"p256", raw}, k.KID(), func(m []byte) []byte {
+		h := sha256.Sum256(m)
+		r, s, _ := ecdsa.Sign(rand.Reader, priv, h[:])
+		sig := make([]byte, 64)
+		r.FillBytes(sig[:32])
+		s.FillBytes(sig[32:])
+		return sig
+	}}
+}
+
+type house struct {
+	t     *testing.T
+	svc   *Service
+	srv   *httptest.Server
+	now   time.Time
+	out   bool
+	alert []string
+}
+
+func newHouse(t *testing.T) *house {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "auth.db"))
+	require.NoError(t, err)
+	_, key, _ := ed25519.GenerateKey(rand.Reader)
+	h := &house{t: t, now: time.Unix(1_800_000_000, 0)}
+	store.now = func() time.Time { return h.now }
+	h.svc = NewService(store, bytes.Repeat([]byte{7}, 32), key, "eria-maison")
+	h.svc.notify = func(title string) { h.alert = append(h.alert, title) }
+	handler := h.svc.Handler()
+	h.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler.ServeHTTP(w, r.WithContext(withOut(r.Context(), h.out)))
+	}))
+	t.Cleanup(h.srv.Close)
+	return h
+}
+
+// call posts in (GET when nil) with an optional bearer token, decodes the
+// reply into out and returns the status.
+func (h *house) call(method, path, token string, in, out any) int {
+	var body bytes.Buffer
+	if in != nil {
+		json.NewEncoder(&body).Encode(in)
+	}
+	req, _ := http.NewRequest(method, h.srv.URL+path, &body)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(h.t, err)
+	defer resp.Body.Close()
+	if out != nil {
+		json.NewDecoder(resp.Body).Decode(out)
+	}
+	return resp.StatusCode
+}
+
+// proof asks a challenge for k and signs challenge ‖ domain ‖ data.
+func (h *house) proof(k signerKey, domain, data string) Proof {
+	var ch struct{ Challenge string }
+	require.Equal(h.t, 200, h.call("POST", "/v1/challenge", "", map[string]string{"kid": k.kid}, &ch))
+	return Proof{Kid: k.kid, Challenge: ch.Challenge, Sig: k.sign([]byte(ch.Challenge + domain + data))}
+}
+
+func (h *house) claims(token string) auth.Claims {
+	c, _, err := auth.Parse(token, h.svc.lookup)
+	require.NoError(h.t, err)
+	return c
+}
+
+// bootstrapAdmin runs the bootstrap and opens an admin session validated by
+// the YubiKey, as eria-ui-admin will.
+func (h *house) bootstrapAdmin() (pc, yubikey signerKey, adminToken string) {
+	pc, yubikey = edKey(h.t), p256Key(h.t)
+	code, err := h.svc.NewBootstrapCode()
+	require.NoError(h.t, err)
+	in := BootstrapIn{Code: code, Passphrase: "correct horse battery", Validator: yubikey.in,
+		Name: "yubikey", Computer: "PC du bureau", Identity: pc.in}
+	require.Equal(h.t, 200, h.call("POST", "/v1/bootstrap", "", in, nil))
+	assert.Equal(h.t, 403, h.call("POST", "/v1/bootstrap", "", in, nil), "one-time code")
+
+	var req AdminRequest
+	require.Equal(h.t, 200, h.call("POST", "/v1/admin/open", "", map[string]any{
+		"proof": h.proof(pc, domainAdminOpen, ""), "passphrase": "correct horse battery"}, &req))
+	assert.Equal(h.t, "PC du bureau", req.Terminal)
+	assert.Equal(h.t, 403, h.call("POST", "/v1/admin/session", "", map[string]any{
+		"request": req.ID, "proof": h.proof(pc, domainAdminOpen, req.ID)}, nil), "not validated yet")
+	require.Equal(h.t, 200, h.call("POST", "/v1/admin/validate", "", map[string]any{
+		"request": req.ID, "proof": h.proof(yubikey, domainValidate, req.ID)}, nil))
+	var s Session
+	require.Equal(h.t, 200, h.call("POST", "/v1/admin/session", "", map[string]any{
+		"request": req.ID, "proof": h.proof(pc, domainAdminOpen, req.ID)}, &s))
+	assert.Equal(h.t, 0, *h.claims(s.Token).Lvl)
+	return pc, yubikey, s.Token
+}
+
+func TestAdminSession(t *testing.T) {
+	h := newHouse(t)
+	pc, _, admin := h.bootstrapAdmin()
+	assert.Contains(t, h.alert, "Session admin ouverte : PC du bureau")
+
+	var list []Profile
+	require.Equal(t, 200, h.call("GET", "/v1/profiles", admin, nil, &list))
+	assert.Len(t, list, 1)
+	assert.Equal(t, 403, h.call("GET", "/v1/profiles", "", nil, nil))
+
+	// A wrong passphrase counts on the terminal's counter.
+	assert.Equal(t, 429, h.call("POST", "/v1/admin/open", "", map[string]any{
+		"proof": h.proof(pc, domainAdminOpen, ""), "passphrase": "wrong horse battery"}, nil))
+	assert.Equal(t, 429, h.call("POST", "/v1/admin/open", "", map[string]any{
+		"proof": h.proof(pc, domainAdminOpen, ""), "passphrase": "correct horse battery"}, nil), "waits 1 min")
+
+	// Never from outside, and the admin API refuses the outer relay.
+	h.out = true
+	assert.Equal(t, 403, h.call("GET", "/v1/profiles", admin, nil, nil))
+}
+
+func TestEnrollAndSessions(t *testing.T) {
+	h := newHouse(t)
+	_, _, admin := h.bootstrapAdmin()
+
+	var lea Profile
+	var bad map[string]string
+	assert.Equal(t, 400, h.call("POST", "/v1/profiles", admin, map[string]any{"name": "Léa", "level": 2, "secret": "1234"}, &bad))
+	assert.Equal(t, "this PIN is too easy to guess", bad["error"])
+	require.Equal(t, 200, h.call("POST", "/v1/profiles", admin, map[string]any{"name": "Léa", "level": 2, "secret": "4827"}, &lea))
+
+	var e Enrollment
+	require.Equal(t, 200, h.call("POST", "/v1/terminals", admin, TerminalChange{
+		Name: "Écran du salon", Type: "fixed", Zone: "salon", Floor: 1}, &e))
+	screen := edKey(t)
+
+	h.out = true
+	assert.Equal(t, 403, h.call("POST", "/v1/enroll", "", map[string]any{"code": e.Code, "identity": screen.in}, nil),
+		"never through the outer relay")
+	h.out = false
+	require.Equal(t, 200, h.call("POST", "/v1/enroll", "", map[string]any{"code": e.Code, "identity": screen.in}, nil))
+	assert.Equal(t, 403, h.call("POST", "/v1/enroll", "", map[string]any{"code": e.Code, "identity": screen.in}, nil), "code consumed")
+
+	var tok struct{ Token string }
+	assert.Equal(t, 403, h.call("POST", "/v1/terminal-token", "", map[string]any{
+		"proof": h.proof(screen, domainTerminal, "")}, nil), "pending until the admin confirms")
+	require.Equal(t, 200, h.call("POST", "/v1/terminals/"+e.Terminal+"/confirm", admin, nil, nil))
+	require.Equal(t, 200, h.call("POST", "/v1/terminal-token", "", map[string]any{
+		"proof": h.proof(screen, domainTerminal, "")}, &tok))
+	c := h.claims(tok.Token)
+	assert.Equal(t, 9, *c.Lvl)
+	assert.Equal(t, "salon", c.Zone)
+	assert.Empty(t, c.Sub)
+
+	// PIN: a wrong one makes the terminal wait, the profile is never locked.
+	sessionOf := func(pin string) (int, Session) {
+		var s Session
+		code := h.call("POST", "/v1/sessions", "", map[string]any{
+			"proof": h.proof(screen, domainSession, jsonID(lea.ID)), "profile": lea.ID, "pin": pin}, &s)
+		return code, s
+	}
+	code, _ := sessionOf("0000")
+	assert.Equal(t, 429, code)
+	code, _ = sessionOf("4827")
+	assert.Equal(t, 429, code, "the terminal waits 1 min")
+	h.now = h.now.Add(time.Minute)
+	code, s := sessionOf("4827")
+	require.Equal(t, 200, code)
+	c = h.claims(s.Token)
+	assert.Equal(t, 2, *c.Lvl)
+	assert.Equal(t, "profil:"+jsonID(lea.ID), c.Sub)
+
+	renew := func(gesture bool) int {
+		return h.call("POST", "/v1/sessions/renew", "", map[string]any{"session": s.ID,
+			"proof": h.proof(screen, domainRenew, s.ID), "gesture": gesture}, nil)
+	}
+	h.now = h.now.Add(90 * time.Second)
+	assert.Equal(t, 200, renew(true))
+	h.now = h.now.Add(150 * time.Second)
+	assert.Equal(t, 403, renew(false), "2 min without a gesture on a fixed screen")
+
+	// Blocking: a child cannot, the admin can; the terminal then gets nothing.
+	_, s = sessionOf("4827")
+	assert.Equal(t, 403, h.call("POST", "/v1/terminals/"+e.Terminal+"/block", s.Token, nil, nil))
+	require.Equal(t, 200, h.call("POST", "/v1/terminals/"+e.Terminal+"/block", admin, nil, nil))
+	assert.Equal(t, 403, h.call("POST", "/v1/terminal-token", "", map[string]any{
+		"proof": h.proof(screen, domainTerminal, "")}, nil))
+	_, err := h.svc.authenticate(s.Token, authz.Relay)
+	assert.Error(t, err, "its tokens are revoked")
+}
+
+func jsonID(id int64) string { b, _ := json.Marshal(id); return string(b) }
+
+func TestBadEnrollmentCodes(t *testing.T) {
+	h := newHouse(t)
+	_, _, admin := h.bootstrapAdmin()
+	var e Enrollment
+	require.Equal(t, 200, h.call("POST", "/v1/terminals", admin, TerminalChange{Name: "Tablette", Type: "fixed", Zone: "cuisine", Floor: 1}, &e))
+	k := edKey(t)
+	for range maxBadCodes {
+		assert.Equal(t, 403, h.call("POST", "/v1/enroll", "", map[string]any{"code": "WRONGCODE", "identity": k.in}, nil))
+	}
+	assert.Equal(t, 403, h.call("POST", "/v1/enroll", "", map[string]any{"code": e.Code, "identity": k.in}, nil),
+		"every open code cancelled after 5 wrong ones")
+	assert.Contains(t, h.alert, "Codes d'enrôlement annulés")
+}
+
+func TestCheckPIN(t *testing.T) {
+	for _, pin := range []string{"1234", "4321", "0000", "1212", "1122", "1987", "2030", "2512", "0101", "2902", "123", "12345", "12a4"} {
+		assert.Error(t, checkPIN(pin), pin)
+	}
+	for _, pin := range []string{"4827", "3591", "7046"} {
+		assert.NoError(t, checkPIN(pin), pin)
+	}
+}

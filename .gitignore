@@ -1,0 +1,5 @@
+/eria-auth
+*.db
+*.db-*
+*.key
+*.crt
