@@ -1,0 +1,30 @@
+# ERIA package description (orchestrator catalog, eria-manager DESIGN §12.3)
+name: eria-auth
+title: Service d'authentification
+description: Profils, PIN, terminaux, sessions et jetons ; joint par les applications à travers un relais
+kind: service
+requires: []
+
+exec:
+  args: ["--config-path", "{config}"]
+  # One pinned instance (AUTH-DESIGN §4.2): never moved or restarted elsewhere automatically.
+  # Before the first start, in a shell on the node, in {data}:
+  #   eria-auth bootstrap   (signing key + one-time code), then eria-manager auth-keyset on the master
+  #   eria-auth csr         (TLS key), then eria-manager tls-sign --role auth and tls-root
+  # ERIA_AUTH_PEPPER comes from eria-manager auth-secrets, in the deployment config only.
+  env: ["ERIA_AUTH_PEPPER=<from eria-manager auth-secrets>"]
+
+config: |
+  location: Europe/Paris
+  deployment: eria-maison
+  database: "{data}/eria-auth.db"
+  keyFile: "{data}/auth-ed25519.key"
+  cert: "{data}/auth.crt"
+  certKey: "{data}/auth-tls.key"
+  roots: "{data}/roots.pem"
+  listen: ":8443"
+  # Master action receiving the encrypted backups, and the age key it decrypts them with
+  backupURL: "http://<master>:<port>/storeAuthBackup"
+  backupRecipient: "<age1… from eria-manager auth-secrets>"
+  # ntfy topic of the alerts (optional)
+  ntfy: ""

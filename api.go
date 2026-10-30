@@ -91,6 +91,12 @@ func (s *Service) Handler() http.Handler {
 		return s.AdminSession(in.Request, in.Proof, isOut(r))
 	}))
 
+	// The revocation list is public and signed: relays fetch it.
+	mux.HandleFunc("GET /v1/revocations", func(w http.ResponseWriter, r *http.Request) {
+		doc, err := s.RevocationDoc()
+		reply(w, map[string]string{"doc": doc}, err)
+	})
+
 	// Blocking: the admin, or a parent from another terminal (§2.10).
 	mux.HandleFunc("POST /v1/terminals/{id}/block", func(w http.ResponseWriter, r *http.Request) {
 		c, err := s.authenticate(bearer(r), authz.Relay) // a person token, as Things and relays take it

@@ -249,6 +249,48 @@ func (s *Service) revokeOlder(subject string) { s.revokeBefore(subject, s.now().
 func (s *Service) revokeBefore(subject string, before int64) {
 	s.store.db.Exec(`INSERT INTO revocations (subject, before) VALUES (?, ?)
 		ON CONFLICT (subject) DO UPDATE SET before = excluded.before`, subject, before)
+	s.store.db.Exec(`INSERT INTO state (key, value) VALUES ('revocations', ?)
+		ON CONFLICT (key) DO UPDATE SET value = max(value + 1, excluded.value)`, s.now().UnixMilli())
+}
+
+// CheckClock refuses to start with a clock behind the last version issued
+// (§4.2): versions are times, they must never go back.
+func (s *Service) CheckClock() error {
+	var version int64
+	s.store.db.QueryRow(`SELECT value FROM state WHERE key = 'revocations'`).Scan(&version)
+	if version > s.now().UnixMilli() {
+		return fmt.Errorf("last version %d is in the future", version)
+	}
+	return nil
+}
+
+// revocationKeep is the longest token plus a margin (§2.10).
+const revocationKeep = terminalTokenTTL + 24*time.Hour
+
+// RevocationDoc is the signed list the relays and the Things apply (§2.10):
+// a versioned snapshot, replaced whole by any higher version.
+func (s *Service) RevocationDoc() (string, error) {
+	var version int64
+	s.store.db.QueryRow(`SELECT value FROM state WHERE key = 'revocations'`).Scan(&version)
+	d := auth.Doc{Iss: "auth", Aud: s.aud, Doc: auth.DocRevocation, Thing: "*",
+		Version: max(version, 1), Issued: s.now().Unix()}
+	rows, err := s.store.db.Query(`SELECT subject, before FROM revocations WHERE before > ? ORDER BY subject`,
+		s.now().Add(-revocationKeep).Unix())
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var r auth.Revocation
+		rows.Scan(&r.Subject, &r.Before)
+		d.Revoked = append(d.Revoked, r)
+	}
+	tok, err := auth.SignDoc(s.key, s.kid, d)
+	if err == nil && len(tok) > auth.MaxTokenSize {
+		s.notify("Liste de révocation trop grande")
+		return "", errors.New("revocation list over 2 KB")
+	}
+	return tok, err
 }
 
 func (s *Service) revoked(c auth.Claims) bool {

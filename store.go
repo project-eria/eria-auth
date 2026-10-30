@@ -11,8 +11,9 @@ import (
 // their keys, sessions, validation requests, revocations. The journal lives
 // in the same file but is not part of the state.
 type Store struct {
-	db  *sql.DB
-	now func() time.Time // overridable by tests
+	db      *sql.DB
+	now     func() time.Time // overridable by tests
+	changed func()           // called after each change of the state (backup)
 }
 
 func OpenStore(path string) (*Store, error) {
@@ -80,6 +81,10 @@ func OpenStore(path string) (*Store, error) {
 			subject TEXT PRIMARY KEY, -- term:<id>, sub:<profile>, service:<kid>
 			before  INTEGER NOT NULL  -- tokens issued before this time fall
 		);
+		CREATE TABLE IF NOT EXISTS state (
+			key   TEXT PRIMARY KEY,
+			value INTEGER NOT NULL
+		);
 		CREATE TABLE IF NOT EXISTS bootstrap (
 			code    TEXT PRIMARY KEY, -- sha256 of the one-time code
 			expires INTEGER NOT NULL
@@ -93,10 +98,12 @@ func OpenStore(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Store{db: db, now: time.Now}, nil
+	return &Store{db: db, now: time.Now, changed: func() {}}, nil
 }
 
-// log adds a journal line. Never a PIN, a passphrase or a code.
+// log adds a journal line after a change of the state, and asks for a
+// backup. Never a PIN, a passphrase or a code.
 func (s *Store) log(event, detail string) {
 	s.db.Exec(`INSERT INTO journal (at, event, detail) VALUES (?, ?, ?)`, s.now().Unix(), event, detail)
+	s.changed()
 }

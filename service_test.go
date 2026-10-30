@@ -223,6 +223,13 @@ func TestEnrollAndSessions(t *testing.T) {
 		"proof": h.proof(screen, domainTerminal, "")}, nil))
 	_, err := h.svc.authenticate(s.Token, authz.Relay)
 	assert.Error(t, err, "its tokens are revoked")
+
+	// The relays learn it from the signed list.
+	var list struct{ Doc string }
+	require.Equal(t, 200, h.call("GET", "/v1/revocations", "", nil, &list))
+	d, err := auth.ParseDoc(list.Doc, h.svc.lookup, "eria-maison", auth.DocRevocation, "urn:eria:garage")
+	require.NoError(t, err)
+	assert.True(t, d.Revokes(h.claims(s.Token)))
 }
 
 func jsonID(id int64) string { b, _ := json.Marshal(id); return string(b) }

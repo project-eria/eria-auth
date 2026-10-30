@@ -34,6 +34,10 @@ type Config struct {
 	CertKey    string `yaml:"certKey" default:"auth-tls.key"`     // its private key, made by `eria-auth csr`
 	Roots      string `yaml:"roots" default:"roots.pem"`          // deployment roots (eria-manager tls-root)
 	Ntfy       string `yaml:"ntfy"`                               // ntfy topic URL for the alerts
+	// Backups (§4.2): the master's action storeAuthBackup, and the age public
+	// key of its backup key (eria-manager auth-secrets).
+	BackupURL       string `yaml:"backupURL" required:"true"`
+	BackupRecipient string `yaml:"backupRecipient" required:"true"`
 }
 
 var config Config
@@ -67,6 +71,15 @@ func main() {
 	}
 	svc := NewService(store, pepper, key, config.Deployment)
 	svc.notify = ntfy(config.Ntfy)
+	if err := svc.CheckClock(); err != nil {
+		zlog.Fatal().Err(err).Msg("[main] Clock behind the last version issued")
+	}
+	backup, err := NewBackup(store, key, svc.kid, config.BackupURL, config.BackupRecipient)
+	if err != nil {
+		zlog.Fatal().Err(err).Msg("[main] Bad backupRecipient")
+	}
+	go backup.Run()
+	backup.Changed() // a first backup at each start
 	zlog.Info().Str("fingerprint", svc.kid).Msg("[main] auth key (compare with eria-manager auth-keyset)")
 
 	cert, err := tls.LoadX509KeyPair(config.Cert, config.CertKey)
@@ -94,6 +107,7 @@ func main() {
 var commands = map[string]func(args []string, out io.Writer) error{
 	"bootstrap":   cmdBootstrap,
 	"fingerprint": cmdFingerprint,
+	"new-key":     cmdNewKey,
 	"csr":         cmdCSR,
 }
 
@@ -131,6 +145,28 @@ func cmdBootstrap(args []string, out io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(out, "Bootstrap code (10 min): %s\n", code)
+	return printFingerprint(key, out)
+}
+
+// cmdNewKey makes the signing key of a restored auth (§4.2): never over an
+// existing one.
+func cmdNewKey(args []string, out io.Writer) error {
+	fs, c := commandFlags("new-key")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	_, key, _ := ed25519.GenerateKey(rand.Reader)
+	f, err := os.OpenFile(c.KeyFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(f, hex.EncodeToString(key.Seed())); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
 	return printFingerprint(key, out)
 }
 
