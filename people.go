@@ -353,6 +353,7 @@ func (s *Service) BlockTerminal(id string, by Caller) error {
 	}
 	s.store.db.Exec(`DELETE FROM sessions WHERE terminal = ?`, id)
 	s.revoke("term:" + id)
+	s.bumpConfig()
 	s.store.log("terminal.block", id+" by "+by.Sub)
 	s.notify("Terminal bloqué : " + id)
 	return nil
@@ -363,6 +364,7 @@ func (s *Service) UnblockTerminal(id string) error {
 	if n, _ := res.RowsAffected(); err != nil || n == 0 {
 		return ErrNotFound
 	}
+	s.bumpConfig()
 	s.store.log("terminal.unblock", id)
 	return nil
 }

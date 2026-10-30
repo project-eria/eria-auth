@@ -74,6 +74,7 @@ func (s *Service) UpdateTerminal(id string, c TerminalChange) error {
 		return ErrInvalid
 	}
 	s.revoke("term:" + id)
+	s.bumpConfig()
 	s.store.log("terminal.update", id)
 	return nil
 }
@@ -193,6 +194,7 @@ func (s *Service) ConfirmTerminal(id string) error {
 	if n, _ := res.RowsAffected(); err != nil || n == 0 {
 		return ErrNotFound
 	}
+	s.bumpConfig()
 	s.store.log("terminal.confirm", id)
 	return nil
 }
@@ -225,6 +227,7 @@ func (s *Service) DeleteTerminal(id string) error {
 		return ErrNotFound
 	}
 	s.revoke("term:" + id)
+	s.bumpConfig()
 	s.store.log("terminal.delete", id)
 	return nil
 }
@@ -309,6 +312,7 @@ func (s *Service) Bootstrap(in BootstrapIn, out bool) (string, error) {
 	}
 	s.revokeOlder(fmt.Sprintf("sub:profil:%d", adminID))
 	s.revokeOlder("term:" + id)
+	s.bumpConfig()
 	s.store.log("bootstrap", "computer "+id+", validator "+validator.KID())
 	s.notify("Bootstrap d'auth effectué")
 	return id, nil

@@ -55,9 +55,15 @@ func (s *Store) migrateConfig() error {
 
 // configChanged bumps the version the relays poll.
 func (s *Service) configChanged(event, detail string) {
+	s.bumpConfig()
+	s.store.log(event, detail)
+}
+
+// bumpConfig tells the relays to read the configuration again: also after
+// a change of the terminals it lists (the active ones).
+func (s *Service) bumpConfig() {
 	s.store.db.Exec(`INSERT INTO state (key, value) VALUES ('config', ?)
 		ON CONFLICT (key) DO UPDATE SET value = max(value + 1, excluded.value)`, s.now().UnixMilli())
-	s.store.log(event, detail)
 }
 
 func (s *Service) configVersion() int64 {
