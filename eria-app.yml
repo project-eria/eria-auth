@@ -12,16 +12,12 @@ exec:
   #   eria-auth bootstrap   (signing key + one-time code), then eria-manager auth-keyset on the master
   #   eria-auth csr         (TLS key), then eria-manager tls-sign --role auth and tls-root
   # ERIA_AUTH_PEPPER comes from eria-manager auth-secrets, in the deployment config only.
-  env: ["ERIA_AUTH_PEPPER=<from eria-manager auth-secrets>"]
+  # The files (database, keys, certificates) are in {data}.
+  env: ["ERIA_AUTH_DATA={data}", "ERIA_AUTH_PEPPER=<from eria-manager auth-secrets>"]
 
 config: |
   location: Europe/Paris
   deployment: eria-maison
-  database: "{data}/eria-auth.db"
-  keyFile: "{data}/auth-ed25519.key"
-  cert: "{data}/auth.crt"
-  certKey: "{data}/auth-tls.key"
-  roots: "{data}/roots.pem"
   listen: ":8443"
   # Master action receiving the encrypted backups, and the age key it decrypts them with
   backupURL: "http://<master>:<port>/storeAuthBackup"
