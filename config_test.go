@@ -44,8 +44,8 @@ func TestConfig(t *testing.T) {
 	require.Equal(t, 200, h.call("GET", fmt.Sprintf("/v1/config?since=%d", before.Version), "", nil, &after))
 	assert.Len(t, after.Pages, 1)
 
-	// Settings are the admin's.
-	assert.Equal(t, 403, h.call("PUT", "/v1/config/home-page", parent, map[string]string{"page": saved.ID}, nil))
+	// The start page is the page editors'; the other settings the admin's.
+	assert.Equal(t, 403, h.call("PUT", "/v1/config/home-page", child, map[string]string{"page": saved.ID}, nil))
 	require.Equal(t, 200, h.call("PUT", "/v1/config/home-page", admin, map[string]string{"page": saved.ID}, nil))
 	assert.Equal(t, 400, h.call("PUT", "/v1/config/hidden", admin, []string{"["}, nil))
 

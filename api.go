@@ -217,7 +217,7 @@ func (s *Service) Handler() http.Handler {
 	}) (any, error) {
 		return nil, s.SetScreen(r.PathValue("id"), in.Screen, in.HomePage)
 	})))
-	mux.HandleFunc("PUT /v1/config/home-page", admin(handle(func(r *http.Request, in struct{ Page string }) (any, error) {
+	mux.HandleFunc("PUT /v1/config/home-page", pageEditor(handle(func(r *http.Request, in struct{ Page string }) (any, error) {
 		return nil, s.SetHomePage(in.Page)
 	})))
 	mux.HandleFunc("PUT /v1/config/contexts", admin(handle(func(r *http.Request, in []Context) (any, error) {
