@@ -113,7 +113,7 @@ func SignBackup(key ed25519.PrivateKey, version int64, data []byte) []byte {
 
 // snapshot is a consistent copy of the database, without the journal.
 func (b *Backup) snapshot() ([]byte, error) {
-	dir, err := os.MkdirTemp("", "eria-auth-backup")
+	dir, err := os.MkdirTemp(".", ".backup-") // the data folder: images have no /tmp
 	if err != nil {
 		return nil, err
 	}
