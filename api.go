@@ -297,6 +297,30 @@ func (s *Service) Handler() http.Handler {
 	}) (any, error) {
 		return nil, s.SignOrder(r.PathValue("id"), in.Kid, in.Sig, isOut(r))
 	}))
+	// Requirements per Thing (§2.4, §2.5) and the simulator (F106).
+	mux.HandleFunc("GET /v1/things", admin(func(w http.ResponseWriter, r *http.Request) {
+		list, err := s.Things()
+		reply(w, list, err)
+	}))
+	mux.HandleFunc("POST /v1/things/{id}/adopt", admin(func(w http.ResponseWriter, r *http.Request) {
+		reply(w, nil, s.AdoptThing(r.PathValue("id")))
+	}))
+	mux.HandleFunc("DELETE /v1/things/{id}", admin(func(w http.ResponseWriter, r *http.Request) {
+		reply(w, nil, s.ForgetThing(r.PathValue("id")))
+	}))
+	mux.HandleFunc("PUT /v1/things/{id}/zones", admin(handle(func(r *http.Request, zones []string) (any, error) {
+		return nil, s.SetZones(r.PathValue("id"), zones)
+	})))
+	mux.HandleFunc("PUT /v1/things/{id}/rules", admin(handle(func(r *http.Request, in struct {
+		State string
+		Key   string
+		Rule  *Rule
+	}) (any, error) {
+		return nil, s.SetRule(r.PathValue("id"), in.State, in.Key, in.Rule)
+	})))
+	mux.HandleFunc("POST /v1/simulate", admin(handle(func(r *http.Request, in SimulateIn) (any, error) {
+		return s.Simulate(in)
+	})))
 	mux.HandleFunc("POST /v1/terminals/revoke-all", handle(func(r *http.Request, in struct{ Proof Proof }) (any, error) {
 		c, err := s.asAdmin(bearer(r))
 		if err != nil || isOut(r) {

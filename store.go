@@ -97,6 +97,33 @@ func OpenStore(path string) (*Store, error) {
 			code    TEXT PRIMARY KEY, -- sha256 of the one-time code
 			expires INTEGER NOT NULL
 		);
+		-- Things and their requirements (§2.4, §2.5): the last TD's
+		-- functions, the capabilities adopted, the rooms, the admin's rules
+		-- (state '') and the overrides of each state.
+		CREATE TABLE IF NOT EXISTS things (
+			id         TEXT PRIMARY KEY,
+			title      TEXT NOT NULL DEFAULT '',
+			types      TEXT NOT NULL DEFAULT '[]', -- capabilities adopted: the defaults
+			seen_types TEXT NOT NULL DEFAULT '[]', -- capabilities of the last TD
+			functions  TEXT NOT NULL DEFAULT '[]',
+			zones      TEXT NOT NULL DEFAULT '[]',
+			adopted    INTEGER NOT NULL DEFAULT 0,
+			seen       INTEGER NOT NULL DEFAULT 0,
+			version    INTEGER NOT NULL DEFAULT 0 -- of its table, time in ms
+		);
+		CREATE TABLE IF NOT EXISTS rules (
+			thing   TEXT NOT NULL REFERENCES things(id) ON DELETE CASCADE,
+			state   TEXT NOT NULL DEFAULT '',
+			key     TEXT NOT NULL,
+			l0      INTEGER NOT NULL, -- local, 0 = None
+			l1      INTEGER NOT NULL, -- remote
+			l2      INTEGER NOT NULL, -- outside
+			confirm TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (thing, state, key)
+		);
+		CREATE TABLE IF NOT EXISTS active_states (
+			state TEXT PRIMARY KEY
+		);
 		CREATE TABLE IF NOT EXISTS journal (
 			id     INTEGER PRIMARY KEY,
 			at     INTEGER NOT NULL,

@@ -17,8 +17,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	eria "github.com/project-eria/eria-core"
 	"github.com/project-eria/go-wot/auth"
@@ -30,6 +32,7 @@ type AppConfig struct {
 	KeyFile    string `yaml:"keyFile" default:"auth-ed25519.key"` // signing key, made by `eria-auth bootstrap`
 	Deployment string `yaml:"deployment" required:"true"`         // aud of the tokens: id of the house
 	Listen     string `yaml:"listen" default:":8443"`             // tunnel listener, for the relays
+	Channel    string `yaml:"channel" default:":8444"`            // Things channel: plain HTTP, home automation network only
 	Cert       string `yaml:"cert" default:"auth.crt"`            // TLS certificate, role "auth", signed by the master
 	CertKey    string `yaml:"certKey" default:"auth-tls.key"`     // its private key, made by `eria-auth csr`
 	Roots      string `yaml:"roots" default:"roots.pem"`          // deployment roots (eria-manager tls-root)
@@ -111,6 +114,13 @@ func main() {
 	go func() {
 		if err := NewServer(svc.Handler()).Serve(ln); err != nil {
 			zlog.Fatal().Err(err).Msg("[main] Tunnel listener stopped")
+		}
+	}()
+	go func() {
+		srv := &http.Server{Addr: config.Channel, Handler: svc.ChannelHandler(), ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second}
+		if err := srv.ListenAndServe(); err != nil {
+			zlog.Fatal().Err(err).Msg("[main] Things channel stopped")
 		}
 	}()
 	eria.WaitForSignal()
