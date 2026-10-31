@@ -249,13 +249,19 @@ func (s *Service) DeleteTerminal(id string) error {
 }
 
 // RevokeAll is the admin's answer to a theft or an intrusion (§1.2): every
-// terminal but the admin's own computer loses its keys and is blocked; each
-// is enrolled again with a new code. The validator signs it (YubiKey).
+// terminal but the admin's own computer loses its keys and is blocked, and
+// the open enrollment codes are cancelled; each is enrolled again with a new
+// code. The validator signs it (YubiKey).
 func (s *Service) RevokeAll(p Proof, by Caller) (int, error) {
 	if _, err := s.prove(p, "validator", domainRevokeAll, ""); err != nil {
 		return 0, err
 	}
-	rows, err := s.store.db.Query(`SELECT id FROM terminals WHERE id != ?`, by.Term)
+	tx, err := s.store.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.Query(`SELECT id FROM terminals WHERE id != ?`, by.Term)
 	if err != nil {
 		return 0, err
 	}
@@ -266,9 +272,19 @@ func (s *Service) RevokeAll(p Proof, by Caller) (int, error) {
 		ids = append(ids, id)
 	}
 	rows.Close()
+	for _, q := range []string{
+		`DELETE FROM keys WHERE role IN ('identity', 'bio') AND terminal IN (SELECT id FROM terminals WHERE id != ?)`,
+		`UPDATE terminals SET status = 'blocked' WHERE id != ?`,
+		`DELETE FROM enrollments WHERE terminal != ?`,
+	} {
+		if _, err := tx.Exec(q, by.Term); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
 	for _, id := range ids {
-		s.store.db.Exec(`DELETE FROM keys WHERE terminal = ? AND role IN ('identity', 'bio')`, id)
-		s.store.db.Exec(`UPDATE terminals SET status = 'blocked' WHERE id = ?`, id)
 		s.revoke("term:" + id)
 	}
 	s.bumpConfig()

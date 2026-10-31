@@ -277,12 +277,16 @@ func TestRevokeAll(t *testing.T) {
 		}
 	}
 
+	var other Enrollment
+	require.Equal(t, 200, h.call("POST", "/v1/terminals", admin, TerminalChange{Name: "Entrée", Type: "fixed", Zone: "entree", Floor: 1}, &other))
 	assert.Equal(t, 403, h.call("POST", "/v1/terminals/revoke-all", admin, map[string]any{
 		"proof": h.proof(pc, domainRevokeAll, "")}, nil), "the validator signs it, not the computer")
 	var out map[string]int
 	require.Equal(t, 200, h.call("POST", "/v1/terminals/revoke-all", admin, map[string]any{
 		"proof": h.proof(yubikey, domainRevokeAll, "")}, &out))
-	assert.Equal(t, 1, out["revoked"])
+	assert.Equal(t, 2, out["revoked"])
+	assert.Equal(t, 403, h.call("POST", "/v1/enroll", "", map[string]any{"code": other.Code, "identity": edKey(t).in}, nil),
+		"a code written down before the incident is cancelled")
 	assert.Equal(t, 403, h.call("POST", "/v1/challenge", "", map[string]string{"kid": screen.kid}, nil), "its key is gone")
 	assert.Equal(t, 200, h.call("POST", "/v1/terminal-token", "", map[string]any{
 		"proof": h.proof(pc, domainTerminal, "")}, nil), "the admin's computer stays")
