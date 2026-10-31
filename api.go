@@ -297,6 +297,18 @@ func (s *Service) Handler() http.Handler {
 	}) (any, error) {
 		return nil, s.SignOrder(r.PathValue("id"), in.Kid, in.Sig, isOut(r))
 	}))
+	// The relay's own service token (§3.6).
+	mux.HandleFunc("POST /v1/relay/challenge", func(w http.ResponseWriter, r *http.Request) {
+		ch, err := s.RelayChallenge(r)
+		reply(w, map[string]string{"challenge": ch}, err)
+	})
+	mux.HandleFunc("POST /v1/relay/token", handle(func(r *http.Request, in struct {
+		Challenge string
+		Sig       []byte
+	}) (any, error) {
+		tok, err := s.RelayToken(r, in.Challenge, in.Sig)
+		return map[string]string{"token": tok}, err
+	}))
 	// Requirements per Thing (§2.4, §2.5) and the simulator (F106).
 	mux.HandleFunc("GET /v1/things", admin(func(w http.ResponseWriter, r *http.Request) {
 		list, err := s.Things()

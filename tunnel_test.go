@@ -6,9 +6,11 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"math/big"
 	"net"
 	"net/http"
@@ -16,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/project-eria/go-wot/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -105,4 +108,53 @@ func TestTunnel(t *testing.T) {
 	other := newPKI(t)
 	_, err = enroll(p.client(addr, other.leaf(t, roleInner)))
 	assert.Error(t, err, "a relay certificate of another authority")
+}
+
+func TestRelayToken(t *testing.T) {
+	h := newHouse(t)
+	_, _, admin := h.bootstrapAdmin()
+	h.svc.ReceiveTD(TDIn{ID: "urn:eria:garage:1", Title: "Garage"})
+	h.svc.ReceiveTD(TDIn{ID: "urn:eria:meteo:1", Title: "Météo"})
+	h.svc.ReceiveTD(TDIn{ID: "urn:eria:new:1", Title: "Pas adopté"})
+	require.NoError(t, h.svc.AdoptThing("urn:eria:garage:1"))
+	require.NoError(t, h.svc.AdoptThing("urn:eria:meteo:1"))
+	require.NoError(t, h.svc.SetZones("urn:eria:garage:1", []string{"garage"}))
+	_ = admin
+
+	p := newPKI(t)
+	tcp, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	srv := NewServer(h.svc.Handler())
+	go srv.Serve(newTunnelListener(tcp, p.leaf(t, "auth"), p.rootPool))
+	t.Cleanup(func() { srv.Close() })
+	relay := p.leaf(t, roleInner)
+	c := p.client(tcp.Addr().String(), relay)
+	post := func(path, body string, out any) int {
+		resp, err := c.Post("https://auth"+path, "application/json", strings.NewReader(body))
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		json.NewDecoder(resp.Body).Decode(out)
+		return resp.StatusCode
+	}
+	var ch struct{ Challenge string }
+	require.Equal(t, 200, post("/v1/relay/challenge", "", &ch))
+	sign := func(key *ecdsa.PrivateKey, msg string) []byte {
+		hash := sha256.Sum256([]byte(msg))
+		r, s, _ := ecdsa.Sign(rand.Reader, key, hash[:])
+		sig := make([]byte, 64)
+		r.FillBytes(sig[:32])
+		s.FillBytes(sig[32:])
+		return sig
+	}
+	other, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	body := func(key *ecdsa.PrivateKey) string {
+		b, _ := json.Marshal(map[string]any{"challenge": ch.Challenge, "sig": sign(key, ch.Challenge+domainRelayToken)})
+		return string(b)
+	}
+	var tok struct{ Token string }
+	assert.Equal(t, 403, post("/v1/relay/token", body(other), &tok), "an app can't sign with the relay's key")
+	require.Equal(t, 200, post("/v1/relay/token", body(relay.PrivateKey.(*ecdsa.PrivateKey)), &tok))
+	claims := h.claims(tok.Token)
+	assert.Equal(t, auth.KindService, claims.Kind)
+	assert.ElementsMatch(t, []string{"room:garage:read", "thing:urn:eria:meteo:1:read"}, claims.Grants)
 }

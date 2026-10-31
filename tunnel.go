@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/project-eria/go-wot/auth"
 	zlog "github.com/rs/zerolog/log"
 )
 
@@ -26,7 +28,8 @@ const (
 // tunnelConn is the app's TLS session, tagged with the relay that carries it.
 type tunnelConn struct {
 	*tls.Conn
-	out bool
+	out   bool
+	relay auth.PublicKey // the relay's certificate key: proves its own requests
 }
 
 type tunnelListener struct {
@@ -93,7 +96,13 @@ func (l *tunnelListener) open(c net.Conn) (net.Conn, error) {
 	default:
 		return nil, errors.New("not a relay certificate")
 	}
-	return &tunnelConn{tls.Server(outer, l.inner), out}, nil
+	var relay auth.PublicKey
+	if k, ok := outer.ConnectionState().PeerCertificates[0].PublicKey.(*ecdsa.PublicKey); ok {
+		if raw, err := k.Bytes(); err == nil {
+			relay, _ = auth.ParsePublicKey(auth.P256, raw)
+		}
+	}
+	return &tunnelConn{tls.Server(outer, l.inner), out, relay}, nil
 }
 
 func (l *tunnelListener) Accept() (net.Conn, error) {
@@ -113,7 +122,19 @@ func NewServer(h http.Handler) *http.Server {
 		IdleTimeout:       2 * time.Minute,
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 			tc, _ := c.(*tunnelConn)
+			if tc != nil {
+				ctx = context.WithValue(ctx, relayKey{}, tc.relay)
+			}
 			return withOut(ctx, tc == nil || tc.out) // unknown origin counts as outside
 		},
 	}
+}
+
+type relayKey struct{}
+
+// relayPublicKey is the key of the relay that carries the request (zero
+// outside a tunnel).
+func relayPublicKey(r *http.Request) (auth.PublicKey, bool) {
+	k, _ := r.Context().Value(relayKey{}).(auth.PublicKey)
+	return k, k.Alg() != ""
 }
