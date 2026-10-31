@@ -52,6 +52,7 @@ type Service struct {
 	notify     func(title string) // ntfy alert, fixed title per type (§4.5)
 	mu         sync.Mutex         // guards badCodes
 	badCodes   []time.Time
+	floodAt    time.Time // last « too many requests » alert, one per 10 min
 }
 
 func NewService(store *Store, pepper []byte, key ed25519.PrivateKey, aud string) *Service {

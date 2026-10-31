@@ -328,3 +328,34 @@ func TestRevokeAll(t *testing.T) {
 	assert.Equal(t, 200, h.call("POST", "/v1/terminal-token", "", map[string]any{
 		"proof": h.proof(pc, domainTerminal, "")}, nil), "the admin's computer stays")
 }
+
+// TestReenroll: a request bound to an existing terminal replaces its key and
+// makes its tokens fall; a bio key needs a phone, a key binds one terminal,
+// and the admin's own computer is never enrolled again from a request.
+func TestReenroll(t *testing.T) {
+	h := newHouse(t)
+	_, _, admin := h.bootstrapAdmin()
+	old := edKey(t)
+	salon := h.enroll(admin, old, TerminalChange{Name: "Salon", Type: "fixed", Zone: "salon", Floor: 1})
+	var tok struct{ Token string }
+	require.Equal(t, 200, h.call("POST", "/v1/terminal-token", "", map[string]any{"proof": h.proof(old, domainTerminal, "")}, &tok))
+
+	again := edKey(t)
+	r := h.ask(again, nil)
+	h.now = h.now.Add(time.Second) // the old token is from an earlier second
+	require.Equal(t, 200, h.call("POST", "/v1/requests/"+r.ID+"/enroll", admin, EnrollIn{Code: r.Code, Existing: salon.ID}, nil))
+	assert.Equal(t, 403, h.call("POST", "/v1/challenge", "", map[string]string{"kid": old.kid}, nil), "the old key is gone")
+	_, err := h.svc.authenticate(tok.Token, authz.Relay)
+	assert.Error(t, err, "the old key's token falls")
+	assert.Equal(t, 200, h.call("POST", "/v1/terminal-token", "", map[string]any{"proof": h.proof(again, domainTerminal, "")}, nil))
+
+	fixed := TerminalChange{Name: "Cuisine", Type: "fixed", Zone: "cuisine", Floor: 1}
+	r = h.ask(edKey(t), map[string]any{"bio": p256Key(t).in})
+	assert.Equal(t, 400, h.call("POST", "/v1/requests/"+r.ID+"/enroll", admin, EnrollIn{Code: r.Code, Terminal: &fixed}, nil), "a bio key needs a phone")
+	r = h.ask(again, nil)
+	assert.Equal(t, 400, h.call("POST", "/v1/requests/"+r.ID+"/enroll", admin, EnrollIn{Code: r.Code, Terminal: &fixed}, nil), "a key binds one terminal")
+	r = h.ask(edKey(t), nil)
+	var bad map[string]string
+	assert.Equal(t, 400, h.call("POST", "/v1/requests/"+r.ID+"/enroll", admin, EnrollIn{Code: r.Code, Existing: h.claims(admin).Term}, &bad))
+	assert.Equal(t, "this computer", bad["error"])
+}

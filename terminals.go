@@ -105,11 +105,14 @@ func (s *Service) Ask(identity KeyIn, bio *KeyIn, device string, out bool) (Requ
 	s.sweepRequests()
 	var open int
 	s.store.db.QueryRow(`SELECT count(*) FROM requests`).Scan(&open)
+	now := s.now()
 	if open >= maxRequests {
 		s.store.db.Exec(`DELETE FROM requests WHERE id IN (SELECT id FROM requests ORDER BY created LIMIT ?)`, open-maxRequests+1)
-		s.notify("Trop de demandes d'enrôlement : les plus anciennes sont tombées")
+		if now.Sub(s.floodAt) > enrollTTL { // a flood from the LAN alerts once
+			s.floodAt = now
+			s.notify("Trop de demandes d'enrôlement : les plus anciennes sont tombées")
+		}
 	}
-	now := s.now()
 	r := Request{ID: randomID(), Device: deviceName(device), Created: now.Unix(), Expires: now.Add(enrollTTL).Unix()}
 	for {
 		r.Code = randomCode(codeLength)
@@ -160,8 +163,12 @@ type EnrollIn struct {
 	Existing string          `json:"existing"`
 }
 
-// Enroll binds a request to a terminal once the admin typed its code.
-func (s *Service) Enroll(requestID string, in EnrollIn) (Terminal, error) {
+// Enroll binds a request to a terminal once the admin typed its code. Never
+// the admin's own computer: its key would be replaced under the session.
+func (s *Service) Enroll(requestID string, in EnrollIn, by Caller) (Terminal, error) {
+	if in.Existing != "" && in.Existing == by.Term {
+		return Terminal{}, Invalid("this computer")
+	}
 	s.sweepRequests()
 	var code, alg, bioAlg, device string
 	var raw, bioRaw []byte

@@ -206,9 +206,13 @@ func (s *Service) Handler() http.Handler {
 		list, err := s.Requests()
 		reply(w, list, err)
 	}))
-	mux.HandleFunc("POST /v1/requests/{id}/enroll", admin(handle(func(r *http.Request, in EnrollIn) (any, error) {
-		return s.Enroll(r.PathValue("id"), in)
-	})))
+	mux.HandleFunc("POST /v1/requests/{id}/enroll", handle(func(r *http.Request, in EnrollIn) (any, error) {
+		c, err := s.asAdmin(bearer(r))
+		if err != nil || isOut(r) {
+			return nil, ErrDenied
+		}
+		return s.Enroll(r.PathValue("id"), in, c)
+	}))
 	mux.HandleFunc("PATCH /v1/terminals/{id}", admin(handle(func(r *http.Request, in TerminalChange) (any, error) {
 		return nil, s.UpdateTerminal(r.PathValue("id"), in)
 	})))
