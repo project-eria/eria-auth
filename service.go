@@ -288,9 +288,9 @@ func (s *Service) RevocationDoc() (string, error) {
 		d.Revoked = append(d.Revoked, r)
 	}
 	tok, err := auth.SignDoc(s.key, s.kid, d)
-	if err == nil && len(tok) > auth.MaxTokenSize {
+	if err == nil && len(tok) > auth.MaxDocSize {
 		s.notify("Liste de révocation trop grande")
-		return "", errors.New("revocation list over 2 KB")
+		return "", errors.New("revocation list over 4000 bytes")
 	}
 	return tok, err
 }
