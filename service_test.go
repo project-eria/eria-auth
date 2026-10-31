@@ -256,3 +256,34 @@ func TestCheckPIN(t *testing.T) {
 		assert.NoError(t, checkPIN(pin), pin)
 	}
 }
+
+// TestRevokeAll: the device told at enrollment is shown; revoking every
+// terminal needs the validator and spares the admin's own computer.
+func TestRevokeAll(t *testing.T) {
+	h := newHouse(t)
+	pc, yubikey, admin := h.bootstrapAdmin()
+
+	var e Enrollment
+	require.Equal(t, 200, h.call("POST", "/v1/terminals", admin, TerminalChange{Name: "Cuisine", Type: "fixed", Zone: "cuisine", Floor: 1}, &e))
+	screen := edKey(t)
+	require.Equal(t, 200, h.call("POST", "/v1/enroll", "", map[string]any{"code": e.Code, "identity": screen.in,
+		"device": "eria-ui-app 0.4 · android\x00\n"}, nil))
+	require.Equal(t, 200, h.call("POST", "/v1/terminals/"+e.Terminal+"/confirm", admin, nil, nil))
+	var list []Terminal
+	require.Equal(t, 200, h.call("GET", "/v1/terminals", admin, nil, &list))
+	for _, x := range list {
+		if x.ID == e.Terminal {
+			assert.Equal(t, "eria-ui-app 0.4 · android", x.Device, "kept printable")
+		}
+	}
+
+	assert.Equal(t, 403, h.call("POST", "/v1/terminals/revoke-all", admin, map[string]any{
+		"proof": h.proof(pc, domainRevokeAll, "")}, nil), "the validator signs it, not the computer")
+	var out map[string]int
+	require.Equal(t, 200, h.call("POST", "/v1/terminals/revoke-all", admin, map[string]any{
+		"proof": h.proof(yubikey, domainRevokeAll, "")}, &out))
+	assert.Equal(t, 1, out["revoked"])
+	assert.Equal(t, 403, h.call("POST", "/v1/challenge", "", map[string]string{"kid": screen.kid}, nil), "its key is gone")
+	assert.Equal(t, 200, h.call("POST", "/v1/terminal-token", "", map[string]any{
+		"proof": h.proof(pc, domainTerminal, "")}, nil), "the admin's computer stays")
+}

@@ -40,6 +40,7 @@ func OpenStore(path string) (*Store, error) {
 			status       TEXT NOT NULL CHECK (status IN ('new', 'pending', 'active', 'blocked')),
 			enrolled     INTEGER NOT NULL DEFAULT 0,
 			last_seen    INTEGER NOT NULL DEFAULT 0,
+			device       TEXT NOT NULL DEFAULT '', -- told by the app at enrollment: shown, never trusted
 			pin_failures INTEGER NOT NULL DEFAULT 0,
 			pin_until    INTEGER NOT NULL DEFAULT 0, -- no PIN tried before this time
 			pin_last     INTEGER NOT NULL DEFAULT 0  -- last failure
@@ -98,6 +99,8 @@ func OpenStore(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Databases made before the column: the error once it exists is expected.
+	db.Exec(`ALTER TABLE terminals ADD COLUMN device TEXT NOT NULL DEFAULT ''`)
 	st := &Store{db: db, now: time.Now, changed: func() {}}
 	if err := st.migrateConfig(); err != nil {
 		return nil, err

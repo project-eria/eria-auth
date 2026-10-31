@@ -123,6 +123,7 @@ const (
 	domainAdminOpen = "eria-admin-open-v1"
 	domainValidate  = "eria-admin-validate-v1"
 	domainEnroll    = "eria-enroll-v1"
+	domainRevokeAll = "eria-revoke-all-v1"
 )
 
 // --- Terminals ---
@@ -137,15 +138,16 @@ type Terminal struct {
 	Owner    int64  `json:"owner,omitempty"`
 	Status   string `json:"status"`
 	Enrolled int64  `json:"enrolled,omitempty"`
+	Device   string `json:"device,omitempty"`
 	LastSeen int64  `json:"lastSeen,omitempty"`
 }
 
 func (s *Service) terminal(id string) (Terminal, error) {
 	var t Terminal
 	var owner sql.NullInt64
-	err := s.store.db.QueryRow(`SELECT id, name, type, zone, floor, room_only, owner, status, enrolled, last_seen
+	err := s.store.db.QueryRow(`SELECT id, name, type, zone, floor, room_only, owner, status, enrolled, device, last_seen
 		FROM terminals WHERE id = ?`, id).
-		Scan(&t.ID, &t.Name, &t.Type, &t.Zone, &t.Floor, &t.RoomOnly, &owner, &t.Status, &t.Enrolled, &t.LastSeen)
+		Scan(&t.ID, &t.Name, &t.Type, &t.Zone, &t.Floor, &t.RoomOnly, &owner, &t.Status, &t.Enrolled, &t.Device, &t.LastSeen)
 	if err != nil {
 		return t, ErrNotFound
 	}

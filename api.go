@@ -39,8 +39,9 @@ func (s *Service) Handler() http.Handler {
 		Code     string
 		Identity KeyIn
 		Bio      *KeyIn
+		Device   string
 	}) (any, error) {
-		id, err := s.Enroll(in.Code, in.Identity, in.Bio, isOut(r))
+		id, err := s.Enroll(in.Code, in.Identity, in.Bio, in.Device, isOut(r))
 		return map[string]string{"terminal": id, "status": "pending"}, err
 	}))
 	mux.HandleFunc("POST /v1/bootstrap", handle(func(r *http.Request, in BootstrapIn) (any, error) {
@@ -231,6 +232,14 @@ func (s *Service) Handler() http.Handler {
 	})))
 	mux.HandleFunc("DELETE /v1/config/manual/{id}", admin(func(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, s.RemoveManual(r.PathValue("id")))
+	}))
+	mux.HandleFunc("POST /v1/terminals/revoke-all", handle(func(r *http.Request, in struct{ Proof Proof }) (any, error) {
+		c, err := s.asAdmin(bearer(r))
+		if err != nil || isOut(r) {
+			return nil, ErrDenied
+		}
+		n, err := s.RevokeAll(in.Proof, c)
+		return map[string]int{"revoked": n}, err
 	}))
 	mux.HandleFunc("POST /v1/terminals/{id}/enrollment", admin(func(w http.ResponseWriter, r *http.Request) {
 		e, err := s.NewEnrollment(r.PathValue("id"))

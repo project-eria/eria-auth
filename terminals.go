@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/project-eria/go-wot/auth"
 )
@@ -106,7 +107,7 @@ func (k KeyIn) parse() (auth.PublicKey, error) { return auth.ParsePublicKey(auth
 // Enroll consumes a code (QR secret or short code) and binds the terminal's
 // keys. The terminal then waits for the admin's confirmation (F098). Only
 // through the inner relay.
-func (s *Service) Enroll(code string, identity KeyIn, bio *KeyIn, out bool) (string, error) {
+func (s *Service) Enroll(code string, identity KeyIn, bio *KeyIn, device string, out bool) (string, error) {
 	if out {
 		return "", ErrDenied
 	}
@@ -150,7 +151,7 @@ func (s *Service) Enroll(code string, identity KeyIn, bio *KeyIn, out bool) (str
 			return "", ErrInvalid
 		}
 	}
-	tx.Exec(`UPDATE terminals SET status = 'pending', enrolled = ? WHERE id = ?`, s.now().Unix(), id)
+	tx.Exec(`UPDATE terminals SET status = 'pending', enrolled = ?, device = ? WHERE id = ?`, s.now().Unix(), deviceName(device), id)
 	if err := tx.Commit(); err != nil {
 		return "", err
 	}
@@ -160,6 +161,21 @@ func (s *Service) Enroll(code string, identity KeyIn, bio *KeyIn, out bool) (str
 	}
 	s.store.log("terminal.enroll", id)
 	return id, nil
+}
+
+// deviceName keeps what the app says it is (version, system) printable and
+// short: shown to the admin before confirming, never relied upon.
+func deviceName(d string) string {
+	d = strings.Map(func(r rune) rune {
+		if unicode.IsPrint(r) {
+			return r
+		}
+		return -1
+	}, strings.TrimSpace(d))
+	if r := []rune(d); len(r) > 64 {
+		d = string(r[:64])
+	}
+	return d
 }
 
 // badCode counts a wrong enrollment code; at the fifth within 10 min, every
@@ -230,6 +246,35 @@ func (s *Service) DeleteTerminal(id string) error {
 	s.bumpConfig()
 	s.store.log("terminal.delete", id)
 	return nil
+}
+
+// RevokeAll is the admin's answer to a theft or an intrusion (§1.2): every
+// terminal but the admin's own computer loses its keys and is blocked; each
+// is enrolled again with a new code. The validator signs it (YubiKey).
+func (s *Service) RevokeAll(p Proof, by Caller) (int, error) {
+	if _, err := s.prove(p, "validator", domainRevokeAll, ""); err != nil {
+		return 0, err
+	}
+	rows, err := s.store.db.Query(`SELECT id FROM terminals WHERE id != ?`, by.Term)
+	if err != nil {
+		return 0, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		rows.Scan(&id)
+		ids = append(ids, id)
+	}
+	rows.Close()
+	for _, id := range ids {
+		s.store.db.Exec(`DELETE FROM keys WHERE terminal = ? AND role IN ('identity', 'bio')`, id)
+		s.store.db.Exec(`UPDATE terminals SET status = 'blocked' WHERE id = ?`, id)
+		s.revoke("term:" + id)
+	}
+	s.bumpConfig()
+	s.store.log("terminals.revoke-all", fmt.Sprintf("%d terminals, kept %s", len(ids), by.Term))
+	s.notify(fmt.Sprintf("Tous les terminaux révoqués (%d)", len(ids)))
+	return len(ids), nil
 }
 
 // --- Bootstrap (§3.5) ---
