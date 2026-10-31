@@ -72,6 +72,18 @@ type keyRecord struct {
 	status   string
 }
 
+// validatorPhone: the bio key of an active phone the admin made a validator
+// (§3.5): it signs the admin's requests like the YubiKey.
+func (s *Service) validatorPhone(k keyRecord) bool {
+	if k.role != "bio" || k.terminal == "" {
+		return false
+	}
+	var ok int
+	s.store.db.QueryRow(`SELECT count(*) FROM terminals WHERE id = ? AND type = 'phone' AND status = 'active' AND validator = 1`,
+		k.terminal).Scan(&ok)
+	return ok == 1
+}
+
 func (s *Service) keyRecord(kid string) (keyRecord, error) {
 	var alg, role, status string
 	var raw []byte
@@ -106,7 +118,7 @@ type Proof struct {
 // prove checks p for the given key role and returns the key record.
 func (s *Service) prove(p Proof, role, domain, data string) (keyRecord, error) {
 	k, err := s.keyRecord(p.Kid)
-	if err != nil || k.role != role || k.status != "active" {
+	if err != nil || k.status != "active" || (k.role != role && !(role == "validator" && s.validatorPhone(k))) {
 		return keyRecord{}, ErrDenied
 	}
 	if !s.challenges.Redeem(p.Challenge, k.pub, []byte(p.Challenge+domain+data), p.Sig) {
@@ -125,6 +137,8 @@ const (
 	domainValidate  = "eria-admin-validate-v1"
 	domainEnroll    = "eria-enroll-v1"
 	domainRevokeAll = "eria-revoke-all-v1"
+	domainValidator = "eria-add-validator-v1"
+	domainPending   = "eria-validations-v1"
 )
 
 // --- Terminals ---
@@ -140,15 +154,17 @@ type Terminal struct {
 	Status   string `json:"status"`
 	Enrolled int64  `json:"enrolled,omitempty"`
 	Device   string `json:"device,omitempty"`
-	LastSeen int64  `json:"lastSeen,omitempty"`
+	// Validator: a phone whose bio key validates the admin's requests.
+	Validator bool  `json:"validator,omitempty"`
+	LastSeen  int64 `json:"lastSeen,omitempty"`
 }
 
 func (s *Service) terminal(id string) (Terminal, error) {
 	var t Terminal
 	var owner sql.NullInt64
-	err := s.store.db.QueryRow(`SELECT id, name, type, zone, floor, room_only, owner, status, enrolled, device, last_seen
+	err := s.store.db.QueryRow(`SELECT id, name, type, zone, floor, room_only, owner, status, enrolled, device, validator, last_seen
 		FROM terminals WHERE id = ?`, id).
-		Scan(&t.ID, &t.Name, &t.Type, &t.Zone, &t.Floor, &t.RoomOnly, &owner, &t.Status, &t.Enrolled, &t.Device, &t.LastSeen)
+		Scan(&t.ID, &t.Name, &t.Type, &t.Zone, &t.Floor, &t.RoomOnly, &owner, &t.Status, &t.Enrolled, &t.Device, &t.Validator, &t.LastSeen)
 	if err != nil {
 		return t, ErrNotFound
 	}

@@ -361,3 +361,50 @@ func TestReenroll(t *testing.T) {
 	assert.Equal(t, 400, h.call("POST", "/v1/requests/"+r.ID+"/enroll", admin, EnrollIn{Code: r.Code, Existing: h.claims(admin).Term}, &bad))
 	assert.Equal(t, "this computer", bad["error"])
 }
+
+// TestPhoneValidator: the YubiKey makes the admin's phone a validator; the
+// phone then lists the admin requests and opens one with its bio key (Face
+// ID), never from outside; enrolled again, it is no validator any more.
+func TestPhoneValidator(t *testing.T) {
+	h := newHouse(t)
+	pc, yubikey, admin := h.bootstrapAdmin()
+	phoneID, bio := edKey(t), p256Key(t)
+	r := h.ask(phoneID, map[string]any{"bio": bio.in})
+	var phone Terminal
+	require.Equal(t, 200, h.call("POST", "/v1/requests/"+r.ID+"/enroll", admin, EnrollIn{Code: r.Code,
+		Terminal: &TerminalChange{Name: "Téléphone", Type: "phone", Floor: 1}}, &phone))
+
+	list := func() (int, []Validation) {
+		var l []Validation
+		return h.call("POST", "/v1/validations", "", map[string]any{"proof": h.proof(phoneID, domainPending, "")}, &l), l
+	}
+	code, _ := list()
+	assert.Equal(t, 403, code, "not a validator yet")
+	assert.Equal(t, 403, h.call("POST", "/v1/terminals/"+phone.ID+"/validator", admin, map[string]any{
+		"proof": h.proof(bio, domainValidator, phone.ID)}, nil), "a phone never makes itself a validator")
+	require.Equal(t, 200, h.call("POST", "/v1/terminals/"+phone.ID+"/validator", admin, map[string]any{
+		"proof": h.proof(yubikey, domainValidator, phone.ID)}, nil))
+	assert.Contains(t, h.alert, "Nouveau téléphone validateur : Téléphone")
+
+	var req AdminRequest
+	require.Equal(t, 200, h.call("POST", "/v1/admin/open", "", map[string]any{
+		"proof": h.proof(pc, domainAdminOpen, ""), "passphrase": "correct horse battery"}, &req))
+	code, pending := list()
+	require.Equal(t, 200, code)
+	require.Len(t, pending, 1)
+	assert.Equal(t, Validation{Request: req.ID, Kind: "admin-session", Origin: "PC du bureau", Expires: pending[0].Expires}, pending[0])
+
+	h.out = true
+	assert.Equal(t, 403, h.call("POST", "/v1/admin/validate", "", map[string]any{
+		"request": req.ID, "proof": h.proof(bio, domainValidate, req.ID)}, nil), "never from outside the house")
+	h.out = false
+	require.Equal(t, 200, h.call("POST", "/v1/admin/validate", "", map[string]any{
+		"request": req.ID, "proof": h.proof(bio, domainValidate, req.ID)}, nil))
+	require.Equal(t, 200, h.call("POST", "/v1/admin/session", "", map[string]any{
+		"request": req.ID, "proof": h.proof(pc, domainAdminOpen, req.ID)}, nil))
+
+	// Enrolled again (a new bio key), the phone validates nothing until the admin says so again.
+	r = h.ask(edKey(t), map[string]any{"bio": p256Key(t).in})
+	require.Equal(t, 200, h.call("POST", "/v1/requests/"+r.ID+"/enroll", admin, EnrollIn{Code: r.Code, Existing: phone.ID}, &phone))
+	assert.False(t, phone.Validator)
+}

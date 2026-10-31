@@ -227,7 +227,8 @@ func (s *Service) Enroll(requestID string, in EnrollIn, by Caller) (Terminal, er
 			return Terminal{}, ErrInvalid
 		}
 	}
-	tx.Exec(`UPDATE terminals SET status = 'active', enrolled = ?, device = ? WHERE id = ?`, s.now().Unix(), device, id)
+	// A new bio key is not a validator until the admin says so again (§1.2).
+	tx.Exec(`UPDATE terminals SET status = 'active', enrolled = ?, device = ?, validator = 0 WHERE id = ?`, s.now().Unix(), device, id)
 	tx.Exec(`DELETE FROM requests WHERE id = ?`, requestID)
 	if err := tx.Commit(); err != nil {
 		return Terminal{}, err

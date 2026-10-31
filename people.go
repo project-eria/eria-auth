@@ -303,8 +303,12 @@ func (s *Service) AdminOpen(p Proof, passphrase string, out bool) (AdminRequest,
 }
 
 // AdminValidate is the validator's signature on a request: the YubiKey on
-// the computer, later the admin's phone.
-func (s *Service) AdminValidate(requestID string, p Proof) error {
+// the computer, or the bio key of the admin's phone (Face ID). Never from
+// outside the house (§3.5).
+func (s *Service) AdminValidate(requestID string, p Proof, out bool) error {
+	if out {
+		return ErrDenied
+	}
 	k, err := s.prove(p, "validator", domainValidate, requestID)
 	if err != nil {
 		return err
@@ -337,6 +341,66 @@ func (s *Service) AdminSession(requestID string, p Proof, out bool) (Session, er
 	}
 	s.notify("Session admin ouverte : " + t.Name)
 	return s.startSession(t, prof, true, false)
+}
+
+// Validation is an admin request waiting for a validator, as the admin's
+// phone shows it: the computer that asks, and until when.
+type Validation struct {
+	Request string `json:"request"`
+	Kind    string `json:"kind"` // admin-session
+	Origin  string `json:"origin"`
+	Expires int64  `json:"expires"`
+}
+
+// Validations lists, for a validator phone (its identity proof, no Face ID
+// yet), the admin requests it may sign. Never from outside the house.
+func (s *Service) Validations(p Proof, out bool) ([]Validation, error) {
+	t, err := s.activeTerminal(p, domainPending, "")
+	if err != nil || out || t.Type != "phone" || !t.Validator {
+		return nil, ErrDenied
+	}
+	rows, err := s.store.db.Query(`SELECT r.id, t.name, r.expires FROM admin_requests r JOIN terminals t ON t.id = r.terminal
+		WHERE r.validated = '' AND r.expires > ? ORDER BY r.expires`, s.now().Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	list := []Validation{}
+	for rows.Next() {
+		v := Validation{Kind: "admin-session"}
+		rows.Scan(&v.Request, &v.Origin, &v.Expires)
+		list = append(list, v)
+	}
+	return list, nil
+}
+
+// SetValidator makes a phone a validator of the admin's requests, signed by
+// a validator already (the YubiKey): its bio key then opens admin sessions.
+// Removing it needs the admin session only.
+func (s *Service) SetValidator(id string, on bool, p *Proof) error {
+	if on {
+		if p == nil {
+			return ErrDenied
+		}
+		if _, err := s.prove(*p, "validator", domainValidator, id); err != nil {
+			return err
+		}
+		var bio int
+		s.store.db.QueryRow(`SELECT count(*) FROM keys WHERE terminal = ? AND role = 'bio'`, id).Scan(&bio)
+		if bio == 0 {
+			return Invalid("this phone has no biometric key")
+		}
+	}
+	res, err := s.store.db.Exec(`UPDATE terminals SET validator = ? WHERE id = ? AND type = 'phone' AND status = 'active'`, on, id)
+	if n, _ := res.RowsAffected(); err != nil || n == 0 {
+		return ErrNotFound
+	}
+	s.store.log("terminal.validator", fmt.Sprintf("%s %t", id, on))
+	if on {
+		t, _ := s.terminal(id)
+		s.notify("Nouveau téléphone validateur : " + t.Name)
+	}
+	return nil
 }
 
 // --- Blocking a terminal (§2.10) ---

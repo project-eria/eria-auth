@@ -90,7 +90,11 @@ func (s *Service) Handler() http.Handler {
 		Request string
 		Proof   Proof
 	}) (any, error) {
-		return nil, s.AdminValidate(in.Request, in.Proof)
+		return nil, s.AdminValidate(in.Request, in.Proof, isOut(r))
+	}))
+	// The admin's phone lists the requests it may validate.
+	mux.HandleFunc("POST /v1/validations", handle(func(r *http.Request, in struct{ Proof Proof }) (any, error) {
+		return s.Validations(in.Proof, isOut(r))
 	}))
 	mux.HandleFunc("POST /v1/admin/session", handle(func(r *http.Request, in struct {
 		Request string
@@ -246,6 +250,12 @@ func (s *Service) Handler() http.Handler {
 	})))
 	mux.HandleFunc("DELETE /v1/config/manual/{id}", admin(func(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, s.RemoveManual(r.PathValue("id")))
+	}))
+	mux.HandleFunc("POST /v1/terminals/{id}/validator", admin(handle(func(r *http.Request, in struct{ Proof Proof }) (any, error) {
+		return nil, s.SetValidator(r.PathValue("id"), true, &in.Proof)
+	})))
+	mux.HandleFunc("DELETE /v1/terminals/{id}/validator", admin(func(w http.ResponseWriter, r *http.Request) {
+		reply(w, nil, s.SetValidator(r.PathValue("id"), false, nil))
 	}))
 	mux.HandleFunc("POST /v1/terminals/revoke-all", handle(func(r *http.Request, in struct{ Proof Proof }) (any, error) {
 		c, err := s.asAdmin(bearer(r))
