@@ -302,6 +302,14 @@ func (s *Service) Handler() http.Handler {
 	}) (any, error) {
 		return nil, s.SignOrder(r.PathValue("id"), in.Kid, in.Sig, isOut(r))
 	}))
+	// A confirmation by the phone's bio key (§2.8), from inside or outside.
+	mux.HandleFunc("POST /v1/confirm", handle(func(r *http.Request, in struct {
+		Proof Proof
+		Act   string
+	}) (any, error) {
+		tok, err := s.Confirm(in.Proof, in.Act)
+		return map[string]string{"token": tok}, err
+	}))
 	// The relay's own service token (§3.6).
 	mux.HandleFunc("POST /v1/relay/challenge", func(w http.ResponseWriter, r *http.Request) {
 		ch, err := s.RelayChallenge(r)
