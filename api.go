@@ -158,6 +158,11 @@ func (s *Service) Handler() http.Handler {
 		doc, err := s.RevocationDoc()
 		reply(w, map[string]string{"doc": doc}, err)
 	})
+	// So are the tables: the relay decides on the observations (§3.6).
+	mux.HandleFunc("GET /v1/tables/{id}", func(w http.ResponseWriter, r *http.Request) {
+		doc, _, err := s.TableDoc(r.PathValue("id"))
+		reply(w, map[string]string{"doc": doc}, err)
+	})
 
 	// Blocking: the admin, or a parent from another terminal (§2.10).
 	mux.HandleFunc("POST /v1/terminals/{id}/block", func(w http.ResponseWriter, r *http.Request) {
