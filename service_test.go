@@ -330,7 +330,7 @@ func TestRevokeAll(t *testing.T) {
 }
 
 // TestReenroll: a request bound to an existing terminal replaces its key and
-// makes its tokens fall; a bio key needs a phone, a key binds one terminal,
+// makes its tokens fall; a bio key is kept on a phone only, a key binds one terminal,
 // and the admin's own computer is never enrolled again from a request.
 func TestReenroll(t *testing.T) {
 	h := newHouse(t)
@@ -350,8 +350,10 @@ func TestReenroll(t *testing.T) {
 	assert.Equal(t, 200, h.call("POST", "/v1/terminal-token", "", map[string]any{"proof": h.proof(again, domainTerminal, "")}, nil))
 
 	fixed := TerminalChange{Name: "Cuisine", Type: "fixed", Zone: "cuisine", Floor: 1}
-	r = h.ask(edKey(t), map[string]any{"bio": p256Key(t).in})
-	assert.Equal(t, 400, h.call("POST", "/v1/requests/"+r.ID+"/enroll", admin, EnrollIn{Code: r.Code, Terminal: &fixed}, nil), "a bio key needs a phone")
+	bio := p256Key(t)
+	r = h.ask(edKey(t), map[string]any{"bio": bio.in})
+	require.Equal(t, 200, h.call("POST", "/v1/requests/"+r.ID+"/enroll", admin, EnrollIn{Code: r.Code, Terminal: &fixed}, nil))
+	assert.Equal(t, 403, h.call("POST", "/v1/challenge", "", map[string]string{"kid": bio.kid}, nil), "a bio key is dropped off a phone")
 	r = h.ask(again, nil)
 	assert.Equal(t, 400, h.call("POST", "/v1/requests/"+r.ID+"/enroll", admin, EnrollIn{Code: r.Code, Terminal: &fixed}, nil), "a key binds one terminal")
 	r = h.ask(edKey(t), nil)

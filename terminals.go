@@ -209,8 +209,8 @@ func (s *Service) Enroll(requestID string, in EnrollIn, by Caller) (Terminal, er
 	default:
 		return Terminal{}, ErrInvalid
 	}
-	if bioAlg != "" && kind != "phone" {
-		return Terminal{}, ErrInvalid // a bio key belongs to a personal phone
+	if kind != "phone" {
+		bioAlg = "" // a bio key belongs to a personal phone: enrolled as something else, it is dropped
 	}
 	tx.Exec(`DELETE FROM keys WHERE terminal = ? AND role IN ('identity', 'bio')`, id)
 	if _, err := tx.Exec(`INSERT INTO keys (kid, role, alg, raw, terminal) VALUES (?, 'identity', ?, ?, ?)`,
