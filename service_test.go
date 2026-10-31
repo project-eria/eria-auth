@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -165,22 +166,27 @@ func TestEnrollAndSessions(t *testing.T) {
 	assert.Equal(t, "this PIN is too easy to guess", bad["error"])
 	require.Equal(t, 200, h.call("POST", "/v1/profiles", admin, map[string]any{"name": "Léa", "level": 2, "secret": "4827"}, &lea))
 
-	var e Enrollment
-	require.Equal(t, 200, h.call("POST", "/v1/terminals", admin, TerminalChange{
-		Name: "Écran du salon", Type: "fixed", Zone: "salon", Floor: 1}, &e))
 	screen := edKey(t)
-
 	h.out = true
-	assert.Equal(t, 403, h.call("POST", "/v1/enroll", "", map[string]any{"code": e.Code, "identity": screen.in}, nil),
+	assert.Equal(t, 403, h.call("POST", "/v1/requests", "", map[string]any{"identity": screen.in}, nil),
 		"never through the outer relay")
 	h.out = false
-	require.Equal(t, 200, h.call("POST", "/v1/enroll", "", map[string]any{"code": e.Code, "identity": screen.in}, nil))
-	assert.Equal(t, 403, h.call("POST", "/v1/enroll", "", map[string]any{"code": e.Code, "identity": screen.in}, nil), "code consumed")
+	r := h.ask(screen, nil)
+	assert.Len(t, r.Code, codeLength)
+	assert.Equal(t, 200, h.call("GET", "/v1/requests/"+r.ID, "", nil, nil), "the terminal sees its request open")
+	var open []Request
+	require.Equal(t, 200, h.call("GET", "/v1/requests", admin, nil, &open))
+	require.Len(t, open, 1)
+	assert.Empty(t, open[0].Code, "the admin never reads the code: they type it")
 
 	var tok struct{ Token string }
-	assert.Equal(t, 403, h.call("POST", "/v1/terminal-token", "", map[string]any{
-		"proof": h.proof(screen, domainTerminal, "")}, nil), "pending until the admin confirms")
-	require.Equal(t, 200, h.call("POST", "/v1/terminals/"+e.Terminal+"/confirm", admin, nil, nil))
+	assert.Equal(t, 403, h.call("POST", "/v1/challenge", "", map[string]string{"kid": screen.kid}, nil),
+		"its key is unknown until the admin types the code")
+	salon := TerminalChange{Name: "Écran du salon", Type: "fixed", Zone: "salon", Floor: 1}
+	var term Terminal
+	require.Equal(t, 200, h.call("POST", "/v1/requests/"+r.ID+"/enroll", admin, EnrollIn{Code: strings.ToLower(r.Code), Terminal: &salon}, &term))
+	assert.Equal(t, "active", term.Status)
+	assert.Equal(t, 404, h.call("GET", "/v1/requests/"+r.ID, "", nil, nil), "the request is used")
 	require.Equal(t, 200, h.call("POST", "/v1/terminal-token", "", map[string]any{
 		"proof": h.proof(screen, domainTerminal, "")}, &tok))
 	c := h.claims(tok.Token)
@@ -217,8 +223,8 @@ func TestEnrollAndSessions(t *testing.T) {
 
 	// Blocking: a child cannot, the admin can; the terminal then gets nothing.
 	_, s = sessionOf("4827")
-	assert.Equal(t, 403, h.call("POST", "/v1/terminals/"+e.Terminal+"/block", s.Token, nil, nil))
-	require.Equal(t, 200, h.call("POST", "/v1/terminals/"+e.Terminal+"/block", admin, nil, nil))
+	assert.Equal(t, 403, h.call("POST", "/v1/terminals/"+term.ID+"/block", s.Token, nil, nil))
+	require.Equal(t, 200, h.call("POST", "/v1/terminals/"+term.ID+"/block", admin, nil, nil))
 	assert.Equal(t, 403, h.call("POST", "/v1/terminal-token", "", map[string]any{
 		"proof": h.proof(screen, domainTerminal, "")}, nil))
 	_, err := h.svc.authenticate(s.Token, authz.Relay)
@@ -234,18 +240,51 @@ func TestEnrollAndSessions(t *testing.T) {
 
 func jsonID(id int64) string { b, _ := json.Marshal(id); return string(b) }
 
+// ask makes key's terminal ask to enroll; enroll is the admin typing the
+// code it shows, for a new terminal.
+func (h *house) ask(key signerKey, extra map[string]any) Request {
+	var r Request
+	in := map[string]any{"identity": key.in}
+	for k, v := range extra {
+		in[k] = v
+	}
+	require.Equal(h.t, 200, h.call("POST", "/v1/requests", "", in, &r))
+	return r
+}
+
+func (h *house) enroll(admin string, key signerKey, c TerminalChange) Terminal {
+	r := h.ask(key, nil)
+	var t Terminal
+	require.Equal(h.t, 200, h.call("POST", "/v1/requests/"+r.ID+"/enroll", admin, EnrollIn{Code: r.Code, Terminal: &c}, &t))
+	return t
+}
+
 func TestBadEnrollmentCodes(t *testing.T) {
 	h := newHouse(t)
 	_, _, admin := h.bootstrapAdmin()
-	var e Enrollment
-	require.Equal(t, 200, h.call("POST", "/v1/terminals", admin, TerminalChange{Name: "Tablette", Type: "fixed", Zone: "cuisine", Floor: 1}, &e))
-	k := edKey(t)
-	for range maxBadCodes {
-		assert.Equal(t, 403, h.call("POST", "/v1/enroll", "", map[string]any{"code": "WRONGCODE", "identity": k.in}, nil))
+	r := h.ask(edKey(t), nil)
+	other := h.ask(edKey(t), nil)
+	c := TerminalChange{Name: "Tablette", Type: "fixed", Zone: "cuisine", Floor: 1}
+	assert.Equal(t, 403, h.call("POST", "/v1/requests/"+r.ID+"/enroll", admin, EnrollIn{Code: other.Code, Terminal: &c}, nil),
+		"another request's code never binds this one")
+	for range maxBadCodes - 1 {
+		assert.Equal(t, 403, h.call("POST", "/v1/requests/"+r.ID+"/enroll", admin, EnrollIn{Code: "ZZZZZ", Terminal: &c}, nil))
 	}
-	assert.Equal(t, 403, h.call("POST", "/v1/enroll", "", map[string]any{"code": e.Code, "identity": k.in}, nil),
-		"every open code cancelled after 5 wrong ones")
-	assert.Contains(t, h.alert, "Codes d'enrôlement annulés")
+	assert.Equal(t, 404, h.call("POST", "/v1/requests/"+r.ID+"/enroll", admin, EnrollIn{Code: r.Code, Terminal: &c}, nil),
+		"every open request cancelled after 5 wrong codes")
+	assert.Contains(t, h.alert, "Demandes d'enrôlement annulées")
+
+	// Past 5 open requests, the oldest falls.
+	var first Request
+	for i := range maxRequests + 1 {
+		if r := h.ask(edKey(t), nil); i == 0 {
+			first = r
+		}
+	}
+	assert.Equal(t, 404, h.call("GET", "/v1/requests/"+first.ID, "", nil, nil))
+	var open []Request
+	require.Equal(t, 200, h.call("GET", "/v1/requests", admin, nil, &open))
+	assert.Len(t, open, maxRequests)
 }
 
 func TestCheckPIN(t *testing.T) {
@@ -263,30 +302,28 @@ func TestRevokeAll(t *testing.T) {
 	h := newHouse(t)
 	pc, yubikey, admin := h.bootstrapAdmin()
 
-	var e Enrollment
-	require.Equal(t, 200, h.call("POST", "/v1/terminals", admin, TerminalChange{Name: "Cuisine", Type: "fixed", Zone: "cuisine", Floor: 1}, &e))
 	screen := edKey(t)
-	require.Equal(t, 200, h.call("POST", "/v1/enroll", "", map[string]any{"code": e.Code, "identity": screen.in,
-		"device": "eria-ui-app 0.4 · android\x00\n"}, nil))
-	require.Equal(t, 200, h.call("POST", "/v1/terminals/"+e.Terminal+"/confirm", admin, nil, nil))
+	r := h.ask(screen, map[string]any{"device": "eria-ui-app 0.4 · android\x00\n"})
+	cuisine := TerminalChange{Name: "Cuisine", Type: "fixed", Zone: "cuisine", Floor: 1}
+	var e Terminal
+	require.Equal(t, 200, h.call("POST", "/v1/requests/"+r.ID+"/enroll", admin, EnrollIn{Code: r.Code, Terminal: &cuisine}, &e))
+	h.enroll(admin, edKey(t), TerminalChange{Name: "Entrée", Type: "fixed", Zone: "entree", Floor: 1})
+	pending := h.ask(edKey(t), nil)
 	var list []Terminal
 	require.Equal(t, 200, h.call("GET", "/v1/terminals", admin, nil, &list))
 	for _, x := range list {
-		if x.ID == e.Terminal {
+		if x.ID == e.ID {
 			assert.Equal(t, "eria-ui-app 0.4 · android", x.Device, "kept printable")
 		}
 	}
 
-	var other Enrollment
-	require.Equal(t, 200, h.call("POST", "/v1/terminals", admin, TerminalChange{Name: "Entrée", Type: "fixed", Zone: "entree", Floor: 1}, &other))
 	assert.Equal(t, 403, h.call("POST", "/v1/terminals/revoke-all", admin, map[string]any{
 		"proof": h.proof(pc, domainRevokeAll, "")}, nil), "the validator signs it, not the computer")
 	var out map[string]int
 	require.Equal(t, 200, h.call("POST", "/v1/terminals/revoke-all", admin, map[string]any{
 		"proof": h.proof(yubikey, domainRevokeAll, "")}, &out))
 	assert.Equal(t, 2, out["revoked"])
-	assert.Equal(t, 403, h.call("POST", "/v1/enroll", "", map[string]any{"code": other.Code, "identity": edKey(t).in}, nil),
-		"a code written down before the incident is cancelled")
+	assert.Equal(t, 404, h.call("GET", "/v1/requests/"+pending.ID, "", nil, nil), "a request made before the incident is cancelled")
 	assert.Equal(t, 403, h.call("POST", "/v1/challenge", "", map[string]string{"kid": screen.kid}, nil), "its key is gone")
 	assert.Equal(t, 200, h.call("POST", "/v1/terminal-token", "", map[string]any{
 		"proof": h.proof(pc, domainTerminal, "")}, nil), "the admin's computer stays")

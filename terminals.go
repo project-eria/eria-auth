@@ -1,9 +1,7 @@
 package main
 
 import (
-	"crypto/rand"
 	"database/sql"
-	"encoding/base64"
 	"fmt"
 	"slices"
 	"strings"
@@ -29,34 +27,6 @@ func (c TerminalChange) valid() bool {
 		c.Floor >= 1 && c.Floor <= 9 && (c.Type == "fixed" || (c.Zone == "" && !c.RoomOnly))
 }
 
-// Enrollment is what the admin shows to the terminal: a QR code (secret of
-// 128 bits) and a short code of 8 characters, valid 10 min (§1.2).
-type Enrollment struct {
-	Terminal string `json:"terminal"`
-	Secret   string `json:"secret"`
-	Code     string `json:"code"`
-	Expires  int64  `json:"expires"`
-}
-
-// CreateTerminal adds a terminal record and its first enrollment.
-func (s *Service) CreateTerminal(c TerminalChange) (Enrollment, error) {
-	if !c.valid() {
-		return Enrollment{}, ErrInvalid
-	}
-	id := randomID()
-	var owner any
-	if c.Owner != 0 {
-		owner = c.Owner
-	}
-	_, err := s.store.db.Exec(`INSERT INTO terminals (id, name, type, zone, floor, room_only, owner, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 'new')`, id, strings.TrimSpace(c.Name), c.Type, c.Zone, c.Floor, c.RoomOnly, owner)
-	if err != nil {
-		return Enrollment{}, ErrInvalid
-	}
-	s.store.log("terminal.create", id+" "+c.Name)
-	return s.NewEnrollment(id)
-}
-
 // UpdateTerminal changes the settings of a terminal; its tokens fall.
 func (s *Service) UpdateTerminal(id string, c TerminalChange) error {
 	t, err := s.terminal(id)
@@ -80,22 +50,6 @@ func (s *Service) UpdateTerminal(id string, c TerminalChange) error {
 	return nil
 }
 
-// NewEnrollment gives a terminal a new code. Consuming it replaces the
-// terminal's keys: one record, one key (F014).
-func (s *Service) NewEnrollment(id string) (Enrollment, error) {
-	if _, err := s.terminal(id); err != nil {
-		return Enrollment{}, err
-	}
-	secret := make([]byte, 16)
-	rand.Read(secret)
-	e := Enrollment{Terminal: id, Secret: base64.RawURLEncoding.EncodeToString(secret), Code: randomCode(8),
-		Expires: s.now().Add(enrollTTL).Unix()}
-	_, err := s.store.db.Exec(`INSERT INTO enrollments (terminal, secret, code, expires) VALUES (?, ?, ?, ?)
-		ON CONFLICT (terminal) DO UPDATE SET secret = excluded.secret, code = excluded.code,
-		expires = excluded.expires, attempts = 0`, id, sha(e.Secret), sha(e.Code), e.Expires)
-	return e, err
-}
-
 // KeyIn is a public key sent by an app: typed by alg, never by its length.
 type KeyIn struct {
 	Alg string `json:"alg"`
@@ -104,67 +58,183 @@ type KeyIn struct {
 
 func (k KeyIn) parse() (auth.PublicKey, error) { return auth.ParsePublicKey(auth.Alg(k.Alg), k.Key) }
 
-// Enroll consumes a code (QR secret or short code) and binds the terminal's
-// keys. The terminal then waits for the admin's confirmation (F098). Only
-// through the inner relay.
-func (s *Service) Enroll(code string, identity KeyIn, bio *KeyIn, device string, out bool) (string, error) {
+// --- Enrollment requests (§1.2) ---
+//
+// A terminal asks to enroll: auth keeps its keys and gives it a code of 5
+// characters, unique among the open requests (10 min, 5 at most), that it
+// shows. The admin types the code read on the terminal's screen into that
+// very request: the terminal is active at once, with a new record or as an
+// existing one (enrolled again). The code is no secret: it names a request
+// whose keys auth already holds, and only the admin types codes.
+
+// Request is an enrollment request; its code goes to the terminal only.
+type Request struct {
+	ID      string `json:"id"`
+	Code    string `json:"code,omitempty"`
+	Device  string `json:"device,omitempty"`
+	Created int64  `json:"created"`
+	Expires int64  `json:"expires"`
+}
+
+const (
+	maxRequests = 5
+	codeLength  = 5
+)
+
+// Ask records a terminal's request with its keys. Only through the inner
+// relay. Past maxRequests open ones, the oldest falls (and the admin is told).
+func (s *Service) Ask(identity KeyIn, bio *KeyIn, device string, out bool) (Request, error) {
 	if out {
-		return "", ErrDenied
+		return Request{}, ErrDenied
 	}
-	s.sweep()
-	var id string
-	err := s.store.db.QueryRow(`DELETE FROM enrollments WHERE (secret = ? OR code = ?) AND expires > ?
-		RETURNING terminal`, sha(code), sha(strings.ToUpper(code)), s.now().Unix()).Scan(&id)
-	if err != nil {
-		return "", s.badCode()
-	}
-	t, _ := s.terminal(id)
 	idKey, err := identity.parse()
 	if err != nil {
-		return "", ErrInvalid
+		return Request{}, ErrInvalid
 	}
-	keys := []struct {
-		pub  auth.PublicKey
-		role string
-	}{{idKey, "identity"}}
+	var bioAlg string
+	var bioRaw []byte
 	if bio != nil {
-		bioKey, err := bio.parse()
-		if err != nil || t.Type != "phone" || bioKey.Alg() != auth.P256 {
-			return "", ErrInvalid // a bio key is hardware-held, on a phone
+		k, err := bio.parse()
+		if err != nil || k.Alg() != auth.P256 {
+			return Request{}, ErrInvalid // a bio key is hardware-held
 		}
-		keys = append(keys, struct {
-			pub  auth.PublicKey
-			role string
-		}{bioKey, "bio"})
+		bioAlg, bioRaw = string(k.Alg()), k.Bytes()
+	}
+	s.mu.Lock() // one request at a time: codes stay unique
+	defer s.mu.Unlock()
+	s.sweepRequests()
+	var open int
+	s.store.db.QueryRow(`SELECT count(*) FROM requests`).Scan(&open)
+	if open >= maxRequests {
+		s.store.db.Exec(`DELETE FROM requests WHERE id IN (SELECT id FROM requests ORDER BY created LIMIT ?)`, open-maxRequests+1)
+		s.notify("Trop de demandes d'enrôlement : les plus anciennes sont tombées")
+	}
+	now := s.now()
+	r := Request{ID: randomID(), Device: deviceName(device), Created: now.Unix(), Expires: now.Add(enrollTTL).Unix()}
+	for {
+		r.Code = randomCode(codeLength)
+		var taken int
+		s.store.db.QueryRow(`SELECT count(*) FROM requests WHERE code = ?`, r.Code).Scan(&taken)
+		if taken == 0 {
+			break
+		}
+	}
+	if _, err := s.store.db.Exec(`INSERT INTO requests (id, code, alg, raw, bio_alg, bio_raw, device, created, expires)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, r.ID, r.Code, idKey.Alg(), idKey.Bytes(), bioAlg, bioRaw, r.Device, r.Created, r.Expires); err != nil {
+		return Request{}, err
+	}
+	s.store.log("enroll.request", r.ID+" "+r.Device)
+	return r, nil
+}
+
+// RequestOpen tells the terminal whether its request still waits.
+func (s *Service) RequestOpen(id string) bool {
+	var n int
+	s.store.db.QueryRow(`SELECT count(*) FROM requests WHERE id = ? AND expires > ?`, id, s.now().Unix()).Scan(&n)
+	return n == 1
+}
+
+// Requests are the open requests, for the admin (without their codes).
+func (s *Service) Requests() ([]Request, error) {
+	s.sweepRequests()
+	rows, err := s.store.db.Query(`SELECT id, device, created, expires FROM requests ORDER BY created`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	list := []Request{}
+	for rows.Next() {
+		var r Request
+		rows.Scan(&r.ID, &r.Device, &r.Created, &r.Expires)
+		list = append(list, r)
+	}
+	return list, nil
+}
+
+// EnrollIn is the admin's answer to a request: the code read on the
+// terminal, and either the settings of a new terminal or the existing one
+// it enrolls again.
+type EnrollIn struct {
+	Code     string          `json:"code"`
+	Terminal *TerminalChange `json:"terminal"`
+	Existing string          `json:"existing"`
+}
+
+// Enroll binds a request to a terminal once the admin typed its code.
+func (s *Service) Enroll(requestID string, in EnrollIn) (Terminal, error) {
+	s.sweepRequests()
+	var code, alg, bioAlg, device string
+	var raw, bioRaw []byte
+	err := s.store.db.QueryRow(`SELECT code, alg, raw, bio_alg, bio_raw, device FROM requests WHERE id = ?`, requestID).
+		Scan(&code, &alg, &raw, &bioAlg, &bioRaw, &device)
+	if err != nil {
+		return Terminal{}, ErrNotFound
+	}
+	if strings.ToUpper(strings.TrimSpace(in.Code)) != code {
+		return Terminal{}, s.badCode()
+	}
+	idKey, err := auth.ParsePublicKey(auth.Alg(alg), raw)
+	if err != nil {
+		return Terminal{}, ErrInvalid
 	}
 	tx, err := s.store.db.Begin()
 	if err != nil {
-		return "", err
+		return Terminal{}, err
 	}
 	defer tx.Rollback()
-	var previous int
-	tx.QueryRow(`SELECT count(*) FROM keys WHERE terminal = ?`, id).Scan(&previous)
-	tx.Exec(`DELETE FROM keys WHERE terminal = ?`, id)
-	for _, k := range keys {
-		if _, err := tx.Exec(`INSERT INTO keys (kid, role, alg, raw, terminal) VALUES (?, ?, ?, ?, ?)`,
-			k.pub.KID(), k.role, k.pub.Alg(), k.pub.Bytes(), id); err != nil {
-			return "", ErrInvalid
+	id, kind := in.Existing, ""
+	switch {
+	case in.Existing != "":
+		if tx.QueryRow(`SELECT type FROM terminals WHERE id = ?`, id).Scan(&kind) != nil {
+			return Terminal{}, ErrNotFound
+		}
+	case in.Terminal != nil && in.Terminal.valid():
+		c := in.Terminal
+		id, kind = randomID(), c.Type
+		var owner any
+		if c.Owner != 0 {
+			owner = c.Owner
+		}
+		if _, err := tx.Exec(`INSERT INTO terminals (id, name, type, zone, floor, room_only, owner, status)
+			VALUES (?, ?, ?, ?, ?, ?, ?, 'active')`, id, strings.TrimSpace(c.Name), c.Type, c.Zone, c.Floor, c.RoomOnly, owner); err != nil {
+			return Terminal{}, ErrInvalid
+		}
+	default:
+		return Terminal{}, ErrInvalid
+	}
+	if bioAlg != "" && kind != "phone" {
+		return Terminal{}, ErrInvalid // a bio key belongs to a personal phone
+	}
+	tx.Exec(`DELETE FROM keys WHERE terminal = ? AND role IN ('identity', 'bio')`, id)
+	if _, err := tx.Exec(`INSERT INTO keys (kid, role, alg, raw, terminal) VALUES (?, 'identity', ?, ?, ?)`,
+		idKey.KID(), alg, raw, id); err != nil {
+		return Terminal{}, ErrInvalid
+	}
+	if bioAlg != "" {
+		bioKey, err := auth.ParsePublicKey(auth.Alg(bioAlg), bioRaw)
+		if err != nil {
+			return Terminal{}, ErrInvalid
+		}
+		if _, err := tx.Exec(`INSERT INTO keys (kid, role, alg, raw, terminal) VALUES (?, 'bio', ?, ?, ?)`,
+			bioKey.KID(), bioAlg, bioRaw, id); err != nil {
+			return Terminal{}, ErrInvalid
 		}
 	}
-	tx.Exec(`UPDATE terminals SET status = 'pending', enrolled = ?, device = ? WHERE id = ?`, s.now().Unix(), deviceName(device), id)
+	tx.Exec(`UPDATE terminals SET status = 'active', enrolled = ?, device = ? WHERE id = ?`, s.now().Unix(), device, id)
+	tx.Exec(`DELETE FROM requests WHERE id = ?`, requestID)
 	if err := tx.Commit(); err != nil {
-		return "", err
+		return Terminal{}, err
 	}
-	if previous > 0 {
-		s.revoke("term:" + id)
-		s.notify("Terminal réenrôlé : " + t.Name)
+	if in.Existing != "" {
+		s.revoke("term:" + id) // the previous key's tokens fall
 	}
-	s.store.log("terminal.enroll", id)
-	return id, nil
+	s.bumpConfig()
+	s.store.log("terminal.enroll", id+" request "+requestID)
+	return s.terminal(id)
 }
 
 // deviceName keeps what the app says it is (version, system) printable and
-// short: shown to the admin before confirming, never relied upon.
+// short: shown to the admin before enrolling, never relied upon.
 func deviceName(d string) string {
 	d = strings.Map(func(r rune) rune {
 		if unicode.IsPrint(r) {
@@ -178,8 +248,8 @@ func deviceName(d string) string {
 	return d
 }
 
-// badCode counts a wrong enrollment code; at the fifth within 10 min, every
-// open code is cancelled.
+// badCode counts a code that does not match its request; at the fifth
+// within 10 min, every open request is cancelled.
 func (s *Service) badCode() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -187,36 +257,19 @@ func (s *Service) badCode() error {
 	s.badCodes = slices.DeleteFunc(s.badCodes, func(t time.Time) bool { return now.Sub(t) > enrollTTL })
 	s.badCodes = append(s.badCodes, now)
 	if len(s.badCodes) >= maxBadCodes {
-		s.store.db.Exec(`DELETE FROM enrollments`)
+		s.store.db.Exec(`DELETE FROM requests`)
 		s.badCodes = nil
 		s.store.log("enroll.cancelled", "too many wrong codes")
-		s.notify("Codes d'enrôlement annulés")
+		s.notify("Demandes d'enrôlement annulées")
 	}
 	return ErrDenied
 }
 
-// sweep deletes the terminals left pending or new after their code expired.
-func (s *Service) sweep() {
-	limit := s.now().Add(-enrollTTL).Unix()
-	s.store.db.Exec(`DELETE FROM terminals WHERE status IN ('new', 'pending')
-		AND NOT EXISTS (SELECT 1 FROM enrollments e WHERE e.terminal = terminals.id)
-		AND (status = 'new' OR enrolled < ?)`, limit)
-}
-
-// ConfirmTerminal is the admin's confirmation of an enrolled terminal.
-func (s *Service) ConfirmTerminal(id string) error {
-	s.sweep()
-	res, err := s.store.db.Exec(`UPDATE terminals SET status = 'active' WHERE id = ? AND status = 'pending'`, id)
-	if n, _ := res.RowsAffected(); err != nil || n == 0 {
-		return ErrNotFound
-	}
-	s.bumpConfig()
-	s.store.log("terminal.confirm", id)
-	return nil
+func (s *Service) sweepRequests() {
+	s.store.db.Exec(`DELETE FROM requests WHERE expires <= ?`, s.now().Unix())
 }
 
 func (s *Service) Terminals() ([]Terminal, error) {
-	s.sweep()
 	rows, err := s.store.db.Query(`SELECT id FROM terminals ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -250,8 +303,8 @@ func (s *Service) DeleteTerminal(id string) error {
 
 // RevokeAll is the admin's answer to a theft or an intrusion (§1.2): every
 // terminal but the admin's own computer loses its keys and is blocked, and
-// the open enrollment codes are cancelled; each is enrolled again with a new
-// code. The validator signs it (YubiKey).
+// the open enrollment requests are cancelled; each is enrolled again from a
+// new request. The validator signs it (YubiKey).
 func (s *Service) RevokeAll(p Proof, by Caller) (int, error) {
 	if _, err := s.prove(p, "validator", domainRevokeAll, ""); err != nil {
 		return 0, err
@@ -275,11 +328,13 @@ func (s *Service) RevokeAll(p Proof, by Caller) (int, error) {
 	for _, q := range []string{
 		`DELETE FROM keys WHERE role IN ('identity', 'bio') AND terminal IN (SELECT id FROM terminals WHERE id != ?)`,
 		`UPDATE terminals SET status = 'blocked' WHERE id != ?`,
-		`DELETE FROM enrollments WHERE terminal != ?`,
 	} {
 		if _, err := tx.Exec(q, by.Term); err != nil {
 			return 0, err
 		}
+	}
+	if _, err := tx.Exec(`DELETE FROM requests`); err != nil { // asked before the incident
+		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, err

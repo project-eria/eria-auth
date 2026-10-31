@@ -35,15 +35,21 @@ func (s *Service) Handler() http.Handler {
 		ch, err := s.Challenge(in.Kid)
 		return map[string]string{"challenge": ch}, err
 	}))
-	mux.HandleFunc("POST /v1/enroll", handle(func(r *http.Request, in struct {
-		Code     string
+	// A terminal asks to enroll (inner relay only), then waits for the admin.
+	mux.HandleFunc("POST /v1/requests", handle(func(r *http.Request, in struct {
 		Identity KeyIn
 		Bio      *KeyIn
 		Device   string
 	}) (any, error) {
-		id, err := s.Enroll(in.Code, in.Identity, in.Bio, in.Device, isOut(r))
-		return map[string]string{"terminal": id, "status": "pending"}, err
+		return s.Ask(in.Identity, in.Bio, in.Device, isOut(r))
 	}))
+	mux.HandleFunc("GET /v1/requests/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !s.RequestOpen(r.PathValue("id")) {
+			reply(w, nil, ErrNotFound)
+			return
+		}
+		reply(w, map[string]string{"status": "open"}, nil)
+	})
 	mux.HandleFunc("POST /v1/bootstrap", handle(func(r *http.Request, in BootstrapIn) (any, error) {
 		id, err := s.Bootstrap(in, isOut(r))
 		return map[string]string{"terminal": id}, err
@@ -196,8 +202,12 @@ func (s *Service) Handler() http.Handler {
 		list, err := s.Terminals()
 		reply(w, list, err)
 	}))
-	mux.HandleFunc("POST /v1/terminals", admin(handle(func(r *http.Request, in TerminalChange) (any, error) {
-		return s.CreateTerminal(in)
+	mux.HandleFunc("GET /v1/requests", admin(func(w http.ResponseWriter, r *http.Request) {
+		list, err := s.Requests()
+		reply(w, list, err)
+	}))
+	mux.HandleFunc("POST /v1/requests/{id}/enroll", admin(handle(func(r *http.Request, in EnrollIn) (any, error) {
+		return s.Enroll(r.PathValue("id"), in)
 	})))
 	mux.HandleFunc("PATCH /v1/terminals/{id}", admin(handle(func(r *http.Request, in TerminalChange) (any, error) {
 		return nil, s.UpdateTerminal(r.PathValue("id"), in)
@@ -206,7 +216,7 @@ func (s *Service) Handler() http.Handler {
 		reply(w, nil, s.DeleteTerminal(r.PathValue("id")))
 	}))
 	for path, op := range map[string]func(string) error{
-		"confirm": s.ConfirmTerminal, "unblock": s.UnblockTerminal, "reset-counter": s.ResetCounter,
+		"unblock": s.UnblockTerminal, "reset-counter": s.ResetCounter,
 	} {
 		mux.HandleFunc("POST /v1/terminals/{id}/"+path, admin(func(w http.ResponseWriter, r *http.Request) {
 			reply(w, nil, op(r.PathValue("id")))
@@ -240,10 +250,6 @@ func (s *Service) Handler() http.Handler {
 		}
 		n, err := s.RevokeAll(in.Proof, c)
 		return map[string]int{"revoked": n}, err
-	}))
-	mux.HandleFunc("POST /v1/terminals/{id}/enrollment", admin(func(w http.ResponseWriter, r *http.Request) {
-		e, err := s.NewEnrollment(r.PathValue("id"))
-		reply(w, e, err)
 	}))
 	return mux
 }

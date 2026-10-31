@@ -56,12 +56,18 @@ func OpenStore(path string) (*Store, error) {
 			name     TEXT NOT NULL DEFAULT '',
 			status   TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('pending', 'active'))
 		);
-		CREATE TABLE IF NOT EXISTS enrollments (
-			terminal TEXT PRIMARY KEY REFERENCES terminals(id) ON DELETE CASCADE,
-			secret   TEXT NOT NULL UNIQUE, -- sha256 of the QR secret
-			code     TEXT NOT NULL UNIQUE, -- sha256 of the short code
-			expires  INTEGER NOT NULL,
-			attempts INTEGER NOT NULL DEFAULT 0
+		-- Enrollment requests of terminals (§1.2): their keys, waiting for
+		-- the admin to type the code they show.
+		CREATE TABLE IF NOT EXISTS requests (
+			id      TEXT PRIMARY KEY,
+			code    TEXT NOT NULL UNIQUE,
+			alg     TEXT NOT NULL,
+			raw     BLOB NOT NULL,
+			bio_alg TEXT NOT NULL DEFAULT '',
+			bio_raw BLOB,
+			device  TEXT NOT NULL DEFAULT '',
+			created INTEGER NOT NULL,
+			expires INTEGER NOT NULL
 		);
 		CREATE TABLE IF NOT EXISTS sessions (
 			id       TEXT PRIMARY KEY,

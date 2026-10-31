@@ -69,7 +69,7 @@ func (p pki) client(addr string, relayCert tls.Certificate) *http.Client {
 
 func TestTunnel(t *testing.T) {
 	h := newHouse(t)
-	_, _, admin := h.bootstrapAdmin()
+	h.bootstrapAdmin()
 	p := newPKI(t)
 
 	tcp, err := net.Listen("tcp", "127.0.0.1:0")
@@ -80,16 +80,10 @@ func TestTunnel(t *testing.T) {
 	t.Cleanup(func() { srv.Close() })
 	addr := tcp.Addr().String()
 
-	newCode := func() string {
-		var e Enrollment
-		require.Equal(t, 200, h.call("POST", "/v1/terminals", admin, TerminalChange{
-			Name: "Écran " + randomCode(4), Type: "fixed", Zone: "salon", Floor: 1}, &e))
-		return e.Code
-	}
-	enroll := func(c *http.Client, code string) (int, error) {
-		body := `{"code":"` + code + `","identity":{"alg":"ed25519","key":"` +
-			"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" + `"}}`
-		resp, err := c.Post("https://auth/v1/enroll", "application/json", strings.NewReader(body))
+	// A terminal asks to enroll through the tunnel.
+	enroll := func(c *http.Client) (int, error) {
+		body := `{"identity":{"alg":"ed25519","key":"` + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" + `"}}`
+		resp, err := c.Post("https://auth/v1/requests", "application/json", strings.NewReader(body))
 		if err != nil {
 			return 0, err
 		}
@@ -97,18 +91,18 @@ func TestTunnel(t *testing.T) {
 		return resp.StatusCode, nil
 	}
 
-	code, err := enroll(p.client(addr, p.leaf(t, roleOuter)), newCode())
+	code, err := enroll(p.client(addr, p.leaf(t, roleOuter)))
 	require.NoError(t, err)
 	assert.Equal(t, 403, code, "the outer relay's role sets out")
 
-	code, err = enroll(p.client(addr, p.leaf(t, roleInner)), newCode())
+	code, err = enroll(p.client(addr, p.leaf(t, roleInner)))
 	require.NoError(t, err)
 	assert.Equal(t, 200, code)
 
-	_, err = enroll(p.client(addr, p.leaf(t, "maitre")), newCode())
+	_, err = enroll(p.client(addr, p.leaf(t, "maitre")))
 	assert.Error(t, err, "only a relay certificate opens a tunnel")
 
 	other := newPKI(t)
-	_, err = enroll(p.client(addr, other.leaf(t, roleInner)), newCode())
+	_, err = enroll(p.client(addr, other.leaf(t, roleInner)))
 	assert.Error(t, err, "a relay certificate of another authority")
 }
