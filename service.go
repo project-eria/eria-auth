@@ -50,15 +50,17 @@ type Service struct {
 	aud        string
 	challenges *auth.Challenges
 	notify     func(title string) // ntfy alert, fixed title per type (§4.5)
-	mu         sync.Mutex         // guards badCodes
+	mu         sync.Mutex         // guards badCodes and orders
 	badCodes   []time.Time
-	floodAt    time.Time // last « too many requests » alert, one per 10 min
+	orders     map[string]*pendingOrder // orders to the master, waiting for the phone
+	floodAt    time.Time                // last « too many requests » alert, one per 10 min
 }
 
 func NewService(store *Store, pepper []byte, key ed25519.PrivateKey, aud string) *Service {
 	pub, _ := auth.ParsePublicKey(auth.Ed25519, key.Public().(ed25519.PublicKey))
 	return &Service{store: store, hasher: Hasher{pepper}, key: key, kid: pub.KID(), aud: aud,
-		challenges: auth.NewChallenges(time.Minute, 4096), notify: func(string) {}}
+		challenges: auth.NewChallenges(time.Minute, 4096), notify: func(string) {},
+		orders: map[string]*pendingOrder{}}
 }
 
 func (s *Service) now() time.Time { return s.store.now() }

@@ -257,6 +257,30 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/terminals/{id}/validator", admin(func(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, s.SetValidator(r.PathValue("id"), false, nil))
 	}))
+	// Orders to the master (§3.5): the admin's computer hands one to the
+	// phone and takes its signature back; the phone signs without a token.
+	mux.HandleFunc("POST /v1/orders", handle(func(r *http.Request, in OrderIn) (any, error) {
+		c, err := s.asAdmin(bearer(r))
+		if err != nil || isOut(r) {
+			return nil, ErrDenied
+		}
+		return s.AskOrder(c, in)
+	}))
+	mux.HandleFunc("GET /v1/orders/{id}", func(w http.ResponseWriter, r *http.Request) {
+		c, err := s.asAdmin(bearer(r))
+		if err != nil || isOut(r) {
+			reply(w, nil, ErrDenied)
+			return
+		}
+		v, err := s.OrderSignature(r.PathValue("id"), c)
+		reply(w, v, err)
+	})
+	mux.HandleFunc("POST /v1/orders/{id}/sign", handle(func(r *http.Request, in struct {
+		Kid string
+		Sig []byte
+	}) (any, error) {
+		return nil, s.SignOrder(r.PathValue("id"), in.Kid, in.Sig, isOut(r))
+	}))
 	mux.HandleFunc("POST /v1/terminals/revoke-all", handle(func(r *http.Request, in struct{ Proof Proof }) (any, error) {
 		c, err := s.asAdmin(bearer(r))
 		if err != nil || isOut(r) {

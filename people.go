@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -347,9 +349,13 @@ func (s *Service) AdminSession(requestID string, p Proof, out bool) (Session, er
 // phone shows it: the computer that asks, and until when.
 type Validation struct {
 	Request string `json:"request"`
-	Kind    string `json:"kind"` // admin-session
+	Kind    string `json:"kind"` // admin-session, order
 	Origin  string `json:"origin"`
 	Expires int64  `json:"expires"`
+	// An order to the master: the phone signs challenge ‖ verb ‖ facts.
+	Challenge string `json:"challenge,omitempty"`
+	Verb      string `json:"verb,omitempty"`
+	Facts     string `json:"facts,omitempty"`
 }
 
 // Validations lists, for a validator phone (its identity proof, no Face ID
@@ -371,7 +377,114 @@ func (s *Service) Validations(p Proof, out bool) ([]Validation, error) {
 		rows.Scan(&v.Request, &v.Origin, &v.Expires)
 		list = append(list, v)
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sweepOrders()
+	for _, o := range s.orders {
+		if o.sig == nil {
+			list = append(list, o.Validation)
+		}
+	}
 	return list, nil
+}
+
+// --- Orders to the master (§3.5) ---
+
+// pendingOrder is an order the master asked to validate, carried to the
+// admin's phone. auth only carries it: the master checks the signature with
+// its own registry of admin keys, never through auth.
+type pendingOrder struct {
+	Validation
+	terminal string // the computer that asked, the only one to get the signature
+	kid      string
+	sig      []byte
+}
+
+const maxOrders = 8
+
+var (
+	// The master's challenge (32 bytes, base64url) and its verbs: a message
+	// that can never read as one of auth's proofs (challenge ‖ "eria-…").
+	orderChallenge = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+	orderVerb      = regexp.MustCompile(`^[a-z][A-Za-z]{2,40}$`)
+)
+
+type OrderIn struct {
+	Challenge string `json:"challenge"`
+	Verb      string `json:"verb"`
+	Facts     string `json:"facts"`
+}
+
+// sweepOrders drops the expired orders; s.mu held.
+func (s *Service) sweepOrders() {
+	now := s.now().Unix()
+	for id, o := range s.orders {
+		if o.Expires <= now {
+			delete(s.orders, id)
+		}
+	}
+}
+
+// AskOrder carries an order from the admin's computer to the validator phone.
+func (s *Service) AskOrder(by Caller, in OrderIn) (Validation, error) {
+	if !orderChallenge.MatchString(in.Challenge) || !orderVerb.MatchString(in.Verb) ||
+		len(in.Facts) > 4000 || !strings.HasPrefix(in.Facts, "{") || !json.Valid([]byte(in.Facts)) {
+		return Validation{}, Invalid("invalid order")
+	}
+	t, err := s.terminal(by.Term)
+	if err != nil {
+		return Validation{}, ErrDenied
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sweepOrders()
+	if len(s.orders) >= maxOrders {
+		return Validation{}, Invalid("too many orders waiting")
+	}
+	o := &pendingOrder{Validation: Validation{Request: randomID(), Kind: "order", Origin: t.Name,
+		Expires: s.now().Add(adminRequestTTL).Unix(), Challenge: in.Challenge, Verb: in.Verb, Facts: in.Facts},
+		terminal: t.ID}
+	s.orders[o.Request] = o
+	return o.Validation, nil
+}
+
+// SignOrder is the validator phone's Face ID signature on an order, checked
+// here only to keep garbage out. Never from outside the house.
+func (s *Service) SignOrder(id, kid string, sig []byte, out bool) error {
+	if out {
+		return ErrDenied
+	}
+	k, err := s.keyRecord(kid)
+	if err != nil || k.status != "active" || !s.validatorPhone(k) {
+		return ErrDenied
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sweepOrders()
+	o, ok := s.orders[id]
+	if !ok || o.sig != nil || !k.pub.Verify([]byte(o.Challenge+o.Verb+o.Facts), sig) {
+		return ErrDenied
+	}
+	o.kid, o.sig = kid, sig
+	s.store.log("order.sign", o.Verb+" by "+kid)
+	return nil
+}
+
+// OrderSignature gives the computer that asked the phone's signature, once:
+// nil while it waits.
+func (s *Service) OrderSignature(id string, by Caller) (map[string]any, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sweepOrders()
+	o, ok := s.orders[id]
+	if !ok || o.terminal != by.Term {
+		return nil, ErrNotFound
+	}
+	if o.sig == nil {
+		return map[string]any{}, nil
+	}
+	delete(s.orders, id)
+	return map[string]any{"kid": o.kid, "sig": o.sig}, nil
 }
 
 // SetValidator makes a phone a validator of the admin's requests, signed by

@@ -403,6 +403,34 @@ func TestPhoneValidator(t *testing.T) {
 	require.Equal(t, 200, h.call("POST", "/v1/admin/session", "", map[string]any{
 		"request": req.ID, "proof": h.proof(pc, domainAdminOpen, req.ID)}, nil))
 
+	// An order to the master, carried to the phone and back.
+	ch := strings.Repeat("A", 43)
+	assert.Equal(t, 400, h.call("POST", "/v1/orders", admin, OrderIn{Challenge: ch, Verb: "eria-admin-validate-v1", Facts: "{}"}, nil),
+		"never a message that reads as one of auth's proofs")
+	var o Validation
+	require.Equal(t, 200, h.call("POST", "/v1/orders", admin, OrderIn{Challenge: ch, Verb: "deployApp", Facts: `{"app":"x"}`}, &o))
+	_, pending = list()
+	require.Len(t, pending, 1)
+	assert.Equal(t, "order", pending[0].Kind)
+	assert.Equal(t, "PC du bureau", pending[0].Origin)
+	var sig map[string]any
+	require.Equal(t, 200, h.call("GET", "/v1/orders/"+o.Request, admin, nil, &sig))
+	assert.Empty(t, sig, "not signed yet")
+	msg := []byte(ch + "deployApp" + `{"app":"x"}`)
+	assert.Equal(t, 403, h.call("POST", "/v1/orders/"+o.Request+"/sign", "", map[string]any{"kid": yubikey.kid, "sig": yubikey.sign(msg)}, nil),
+		"the YubiKey signs on the computer, not here")
+	assert.Equal(t, 403, h.call("POST", "/v1/orders/"+o.Request+"/sign", "", map[string]any{"kid": bio.kid, "sig": bio.sign([]byte("other"))}, nil))
+	h.out = true
+	assert.Equal(t, 403, h.call("POST", "/v1/orders/"+o.Request+"/sign", "", map[string]any{"kid": bio.kid, "sig": bio.sign(msg)}, nil),
+		"never from outside the house")
+	h.out = false
+	require.Equal(t, 200, h.call("POST", "/v1/orders/"+o.Request+"/sign", "", map[string]any{"kid": bio.kid, "sig": bio.sign(msg)}, nil))
+	_, pending = list()
+	assert.Empty(t, pending)
+	require.Equal(t, 200, h.call("GET", "/v1/orders/"+o.Request, admin, nil, &sig))
+	assert.Equal(t, bio.kid, sig["kid"])
+	assert.Equal(t, 404, h.call("GET", "/v1/orders/"+o.Request, admin, nil, nil), "given once")
+
 	// Enrolled again (a new bio key), the phone validates nothing until the admin says so again.
 	r = h.ask(edKey(t), map[string]any{"bio": p256Key(t).in})
 	require.Equal(t, 200, h.call("POST", "/v1/requests/"+r.ID+"/enroll", admin, EnrollIn{Code: r.Code, Existing: phone.ID}, &phone))
