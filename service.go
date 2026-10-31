@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/ed25519"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"sync"
@@ -132,15 +133,18 @@ func (s *Service) prove(p Proof, role, domain, data string) (keyRecord, error) {
 // Signing domains of the proofs, so that one signature never serves another
 // purpose.
 const (
-	domainTerminal  = "eria-terminal-v1"
-	domainSession   = "eria-session-v1"
-	domainRenew     = "eria-renew-v1"
-	domainAdminOpen = "eria-admin-open-v1"
-	domainValidate  = "eria-admin-validate-v1"
-	domainEnroll    = "eria-enroll-v1"
-	domainRevokeAll = "eria-revoke-all-v1"
-	domainValidator = "eria-add-validator-v1"
-	domainPending   = "eria-validations-v1"
+	domainTerminal   = "eria-terminal-v1"
+	domainSession    = "eria-session-v1"
+	domainRenew      = "eria-renew-v1"
+	domainAdminOpen  = "eria-admin-open-v1"
+	domainValidate   = "eria-admin-validate-v1"
+	domainEnroll     = "eria-enroll-v1"
+	domainRevokeAll  = "eria-revoke-all-v1"
+	domainValidator  = "eria-add-validator-v1"
+	domainPending    = "eria-validations-v1"
+	domainNewBio     = "eria-new-bio-v1"
+	domainBioState   = "eria-bio-state-v1"
+	domainConfirmBio = "eria-confirm-bio-v1"
 )
 
 // --- Terminals ---
@@ -159,6 +163,8 @@ type Terminal struct {
 	// Validator: a phone whose bio key validates the admin's requests.
 	Validator bool  `json:"validator,omitempty"`
 	LastSeen  int64 `json:"lastSeen,omitempty"`
+	// BioPending: a new bio key after a biometric change, waiting for the admin.
+	BioPending *BioPending `json:"bioPending,omitempty"`
 }
 
 func (s *Service) terminal(id string) (Terminal, error) {
@@ -171,6 +177,13 @@ func (s *Service) terminal(id string) (Terminal, error) {
 		return t, ErrNotFound
 	}
 	t.Owner = owner.Int64
+	var b BioPending
+	var raw []byte
+	if s.store.db.QueryRow(`SELECT kid, raw, since FROM keys WHERE terminal = ? AND role = 'bio' AND status = 'pending'`, id).
+		Scan(&b.Kid, &raw, &b.Since) == nil {
+		b.Print, b.Key = keyPrint(raw), base64.RawURLEncoding.EncodeToString(raw)
+		t.BioPending = &b
+	}
 	return t, nil
 }
 

@@ -109,6 +109,7 @@ func OpenStore(path string) (*Store, error) {
 	// Databases made before the column: the error once it exists is expected.
 	db.Exec(`ALTER TABLE terminals ADD COLUMN device TEXT NOT NULL DEFAULT ''`)
 	db.Exec(`ALTER TABLE terminals ADD COLUMN validator INTEGER NOT NULL DEFAULT 0`)
+	db.Exec(`ALTER TABLE keys ADD COLUMN since INTEGER NOT NULL DEFAULT 0`) // a pending bio key: when it came
 	st := &Store{db: db, now: time.Now, changed: func() {}}
 	if err := st.migrateConfig(); err != nil {
 		return nil, err

@@ -257,6 +257,22 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/terminals/{id}/validator", admin(func(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, s.SetValidator(r.PathValue("id"), false, nil))
 	}))
+	// A new bio key (§1.2): the phone asks, the admin confirms or refuses.
+	mux.HandleFunc("POST /v1/bio", handle(func(r *http.Request, in struct {
+		Proof Proof
+		Key   KeyIn
+	}) (any, error) {
+		return s.NewBio(in.Proof, in.Key, isOut(r))
+	}))
+	mux.HandleFunc("POST /v1/bio/state", handle(func(r *http.Request, in struct{ Proof Proof }) (any, error) {
+		return s.BioStateOf(in.Proof)
+	}))
+	mux.HandleFunc("POST /v1/terminals/{id}/bio", admin(handle(func(r *http.Request, in struct{ Proof *Proof }) (any, error) {
+		return nil, s.ConfirmBio(r.PathValue("id"), in.Proof)
+	})))
+	mux.HandleFunc("DELETE /v1/terminals/{id}/bio", admin(func(w http.ResponseWriter, r *http.Request) {
+		reply(w, nil, s.RefuseBio(r.PathValue("id")))
+	}))
 	// Orders to the master (§3.5): the admin's computer hands one to the
 	// phone and takes its signature back; the phone signs without a token.
 	mux.HandleFunc("POST /v1/orders", handle(func(r *http.Request, in OrderIn) (any, error) {

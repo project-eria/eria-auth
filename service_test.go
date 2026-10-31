@@ -436,3 +436,67 @@ func TestPhoneValidator(t *testing.T) {
 	require.Equal(t, 200, h.call("POST", "/v1/requests/"+r.ID+"/enroll", admin, EnrollIn{Code: r.Code, Existing: phone.ID}, &phone))
 	assert.False(t, phone.Validator)
 }
+
+// TestNewBio: after a biometric change the phone sends a new bio key, which
+// signs nothing until the admin confirms it; the admin's phone needs the
+// YubiKey for that (AUTH-DESIGN §1.2).
+func TestNewBio(t *testing.T) {
+	h := newHouse(t)
+	_, yubikey, admin := h.bootstrapAdmin()
+	var lea Profile
+	require.Equal(t, 200, h.call("POST", "/v1/profiles", admin, map[string]any{"name": "Léa", "level": 3, "secret": "4821"}, &lea))
+	phoneID, bio := edKey(t), p256Key(t)
+	r := h.ask(phoneID, map[string]any{"bio": bio.in})
+	var phone Terminal
+	require.Equal(t, 200, h.call("POST", "/v1/requests/"+r.ID+"/enroll", admin, EnrollIn{Code: r.Code,
+		Terminal: &TerminalChange{Name: "Téléphone", Type: "phone", Floor: 1, Owner: lea.ID}}, &phone))
+	require.Equal(t, 200, h.call("POST", "/v1/terminals/"+phone.ID+"/validator", admin, map[string]any{
+		"proof": h.proof(yubikey, domainValidator, phone.ID)}, nil))
+	state := func() BioState {
+		var st BioState
+		require.Equal(t, 200, h.call("POST", "/v1/bio/state", "", map[string]any{"proof": h.proof(phoneID, domainBioState, "")}, &st))
+		return st
+	}
+	assert.Equal(t, "active", state().State)
+
+	fresh := p256Key(t)
+	h.out = true
+	assert.Equal(t, 403, h.call("POST", "/v1/bio", "", map[string]any{"proof": h.proof(phoneID, domainNewBio, fresh.kid), "key": fresh.in}, nil),
+		"inner relay only")
+	h.out = false
+	assert.Equal(t, 403, h.call("POST", "/v1/bio", "", map[string]any{"proof": h.proof(phoneID, domainNewBio, "other"), "key": fresh.in}, nil),
+		"the identity key signs that very key")
+	var st BioState
+	require.Equal(t, 200, h.call("POST", "/v1/bio", "", map[string]any{"proof": h.proof(phoneID, domainNewBio, fresh.kid), "key": fresh.in}, &st))
+	assert.Equal(t, "pending", st.State)
+	assert.Len(t, st.Print, 8)
+	assert.Contains(t, h.alert, "Nouvelle clé biométrique en attente : Téléphone")
+
+	// The old key is gone, the pending one signs nothing in.
+	assert.Equal(t, 403, h.call("POST", "/v1/challenge", "", map[string]string{"kid": bio.kid}, nil))
+	assert.Equal(t, 403, h.call("POST", "/v1/sessions", "", map[string]any{"proof": h.proof(fresh, domainSession, ""), "bio": true}, nil))
+	var list []Terminal
+	require.Equal(t, 200, h.call("GET", "/v1/terminals", admin, nil, &list))
+	var seen *BioPending
+	for _, x := range list {
+		if x.ID == phone.ID {
+			seen = x.BioPending
+		}
+	}
+	require.NotNil(t, seen)
+	assert.Equal(t, st.Print, seen.Print, "the admin sees the phone's print")
+
+	assert.Equal(t, 400, h.call("POST", "/v1/terminals/"+phone.ID+"/bio", admin, map[string]any{}, nil), "the admin's phone needs the YubiKey")
+	assert.Equal(t, 403, h.call("POST", "/v1/terminals/"+phone.ID+"/bio", admin, map[string]any{
+		"proof": h.proof(fresh, domainConfirmBio, phone.ID)}, nil), "never by its own key")
+	require.Equal(t, 200, h.call("POST", "/v1/terminals/"+phone.ID+"/bio", admin, map[string]any{
+		"proof": h.proof(yubikey, domainConfirmBio, phone.ID)}, nil))
+	assert.Equal(t, "active", state().State)
+	assert.Equal(t, 200, h.call("POST", "/v1/sessions", "", map[string]any{"proof": h.proof(fresh, domainSession, ""), "bio": true}, nil))
+
+	// Refused: the phone has no bio key any more.
+	other := p256Key(t)
+	require.Equal(t, 200, h.call("POST", "/v1/bio", "", map[string]any{"proof": h.proof(phoneID, domainNewBio, other.kid), "key": other.in}, nil))
+	require.Equal(t, 200, h.call("DELETE", "/v1/terminals/"+phone.ID+"/bio", admin, nil, nil))
+	assert.Equal(t, "none", state().State)
+}

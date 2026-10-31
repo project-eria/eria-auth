@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"slices"
 	"strings"
@@ -441,4 +443,114 @@ func (s *Service) Bootstrap(in BootstrapIn, out bool) (string, error) {
 	s.store.log("bootstrap", "computer "+id+", validator "+validator.KID())
 	s.notify("Bootstrap d'auth effectué")
 	return id, nil
+}
+
+// --- New bio key after a biometric change (§1.2) ---
+
+// BioPending is a phone's new bio key as the admin checks it: the phone
+// shows the same print.
+type BioPending struct {
+	Since int64  `json:"since"`
+	Print string `json:"print"`
+	Kid   string `json:"kid"`
+	Key   string `json:"key"` // raw, base64url: for the master's admin-key add
+}
+
+// keyPrint is what a person compares between two screens: 8 hex characters
+// of the key's sha256.
+func keyPrint(raw []byte) string {
+	h := sha256.Sum256(raw)
+	return strings.ToUpper(hex.EncodeToString(h[:4]))
+}
+
+// BioState is a phone's bio key as auth knows it: active, pending or none
+// (refused, or never had one).
+type BioState struct {
+	State string `json:"state"`
+	Since int64  `json:"since,omitempty"`
+	Print string `json:"print,omitempty"`
+	// Validator: the admin's phone, whose new key the YubiKey confirms.
+	Validator bool `json:"validator,omitempty"`
+}
+
+func (s *Service) bioState(id string) BioState {
+	var st BioState
+	var raw []byte
+	s.store.db.QueryRow(`SELECT validator FROM terminals WHERE id = ?`, id).Scan(&st.Validator)
+	if s.store.db.QueryRow(`SELECT status, raw, since FROM keys WHERE terminal = ? AND role = 'bio'`, id).
+		Scan(&st.State, &raw, &st.Since) != nil {
+		st.State = "none"
+		return st
+	}
+	st.Print = keyPrint(raw)
+	return st
+}
+
+// NewBio replaces a phone's bio key after its biometry changed: the phone's
+// identity key signs the new one, which waits for the admin. The old one
+// goes at once. Inner relay only, like an enrollment.
+func (s *Service) NewBio(p Proof, in KeyIn, out bool) (BioState, error) {
+	key, err := in.parse()
+	if err != nil || in.Alg != "p256" || out {
+		return BioState{}, ErrDenied
+	}
+	t, err := s.activeTerminal(p, domainNewBio, key.KID())
+	if err != nil || t.Type != "phone" {
+		return BioState{}, ErrDenied
+	}
+	tx, err := s.store.db.Begin()
+	if err != nil {
+		return BioState{}, err
+	}
+	defer tx.Rollback()
+	tx.Exec(`DELETE FROM keys WHERE terminal = ? AND role = 'bio'`, t.ID)
+	if _, err := tx.Exec(`INSERT INTO keys (kid, role, alg, raw, terminal, status, since) VALUES (?, 'bio', ?, ?, ?, 'pending', ?)`,
+		key.KID(), in.Alg, in.Key, t.ID, s.now().Unix()); err != nil {
+		return BioState{}, ErrInvalid
+	}
+	if err := tx.Commit(); err != nil {
+		return BioState{}, err
+	}
+	s.store.log("terminal.bio", t.ID+" pending "+key.KID())
+	s.notify("Nouvelle clé biométrique en attente : " + t.Name)
+	return s.bioState(t.ID), nil
+}
+
+// BioStateOf answers a phone, on its identity proof.
+func (s *Service) BioStateOf(p Proof) (BioState, error) {
+	t, err := s.activeTerminal(p, domainBioState, "")
+	if err != nil {
+		return BioState{}, err
+	}
+	return s.bioState(t.ID), nil
+}
+
+// ConfirmBio is the admin's yes to a pending bio key. The admin's own phone
+// (a validator) needs the YubiKey too: its key opens the administration.
+func (s *Service) ConfirmBio(id string, p *Proof) error {
+	t, err := s.terminal(id)
+	if err != nil || t.BioPending == nil {
+		return ErrNotFound
+	}
+	if t.Validator {
+		if p == nil {
+			return Invalid("the YubiKey must confirm the admin's phone")
+		}
+		if _, err := s.prove(*p, "validator", domainConfirmBio, id); err != nil {
+			return err
+		}
+	}
+	s.store.db.Exec(`UPDATE keys SET status = 'active' WHERE terminal = ? AND role = 'bio' AND status = 'pending'`, id)
+	s.store.log("terminal.bio", id+" confirmed "+t.BioPending.Kid)
+	return nil
+}
+
+// RefuseBio drops a pending bio key: the phone stays an ordinary terminal.
+func (s *Service) RefuseBio(id string) error {
+	res, err := s.store.db.Exec(`DELETE FROM keys WHERE terminal = ? AND role = 'bio' AND status = 'pending'`, id)
+	if n, _ := res.RowsAffected(); err != nil || n == 0 {
+		return ErrNotFound
+	}
+	s.store.log("terminal.bio", id+" refused")
+	return nil
 }
