@@ -55,6 +55,7 @@ type Service struct {
 	badCodes   []time.Time
 	orders     map[string]*pendingOrder // orders to the master, waiting for the phone
 	floodAt    time.Time                // last « too many requests » alert, one per 10 min
+	newAt      time.Time                // last « new device » alert, one per 10 min
 }
 
 func NewService(store *Store, pepper []byte, key ed25519.PrivateKey, aud string) *Service {

@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/project-eria/eria-core/model"
 	"github.com/project-eria/go-wot/auth"
@@ -132,7 +133,15 @@ func (s *Service) ReceiveTD(td TDIn) error {
 			td.ID, td.Title, jsonText(types), jsonText(funcs), s.now().Unix())
 		if err == nil {
 			s.store.log("thing.new", td.ID)
-			s.notify("Nouvel appareil à classer")
+			s.mu.Lock()
+			alert := s.now().Sub(s.newAt) > 10*time.Minute // a node starting sends many
+			if alert {
+				s.newAt = s.now()
+			}
+			s.mu.Unlock()
+			if alert {
+				s.notify("Nouvel appareil à classer")
+			}
 		}
 		return err
 	case err != nil:
