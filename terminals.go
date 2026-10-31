@@ -249,7 +249,8 @@ func deviceName(d string) string {
 }
 
 // badCode counts a code that does not match its request; at the fifth
-// within 10 min, every open request is cancelled.
+// within 10 min, every open request is cancelled. Not a refusal of the
+// admin's session (403 ends it in the app): a 400 that says why.
 func (s *Service) badCode() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -262,7 +263,7 @@ func (s *Service) badCode() error {
 		s.store.log("enroll.cancelled", "too many wrong codes")
 		s.notify("Demandes d'enrôlement annulées")
 	}
-	return ErrDenied
+	return Invalid("wrong code")
 }
 
 func (s *Service) sweepRequests() {

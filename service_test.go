@@ -265,10 +265,10 @@ func TestBadEnrollmentCodes(t *testing.T) {
 	r := h.ask(edKey(t), nil)
 	other := h.ask(edKey(t), nil)
 	c := TerminalChange{Name: "Tablette", Type: "fixed", Zone: "cuisine", Floor: 1}
-	assert.Equal(t, 403, h.call("POST", "/v1/requests/"+r.ID+"/enroll", admin, EnrollIn{Code: other.Code, Terminal: &c}, nil),
+	assert.Equal(t, 400, h.call("POST", "/v1/requests/"+r.ID+"/enroll", admin, EnrollIn{Code: other.Code, Terminal: &c}, nil),
 		"another request's code never binds this one")
 	for range maxBadCodes - 1 {
-		assert.Equal(t, 403, h.call("POST", "/v1/requests/"+r.ID+"/enroll", admin, EnrollIn{Code: "ZZZZZ", Terminal: &c}, nil))
+		assert.Equal(t, 400, h.call("POST", "/v1/requests/"+r.ID+"/enroll", admin, EnrollIn{Code: "ZZZZZ", Terminal: &c}, nil))
 	}
 	assert.Equal(t, 404, h.call("POST", "/v1/requests/"+r.ID+"/enroll", admin, EnrollIn{Code: r.Code, Terminal: &c}, nil),
 		"every open request cancelled after 5 wrong codes")
