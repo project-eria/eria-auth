@@ -105,4 +105,13 @@ func TestThingTables(t *testing.T) {
 	send("POST", "/v1/things/td", strings.Replace(garageTD, `"GarageDoor"`, `"LightBasic"`, 1), "")
 	assert.Contains(t, h.alert, "Capacités d'un appareil changées")
 	assert.Equal(t, Rule{Levels: [3]int{1, 1, 1}, Confirm: auth.OutsideRoom}, table().Table["action/open/invoke"])
+
+	// A TD without @type: lists, never null, for the admin screen.
+	send("POST", "/v1/things/td", `{"id": "urn:eria:tic:1", "title": "Teleinfo", "properties": {"iinst": {}}}`, "")
+	var list []map[string]any
+	require.Equal(t, 200, h.call("GET", "/v1/things", admin, nil, &list))
+	for _, th := range list {
+		assert.NotNil(t, th["seenTypes"], th["id"])
+		assert.NotNil(t, th["types"], th["id"])
+	}
 }

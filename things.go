@@ -290,6 +290,12 @@ func (s *Service) thing(id string) (ThingRecord, error) {
 	json.Unmarshal([]byte(seen), &t.SeenTypes)
 	json.Unmarshal([]byte(funcs), &t.Functions)
 	json.Unmarshal([]byte(zones), &t.Zones)
+	// A TD without @type stores null: the admin screen wants lists.
+	for _, l := range []*[]string{&t.Types, &t.SeenTypes, &t.Functions, &t.Zones} {
+		if *l == nil {
+			*l = []string{}
+		}
+	}
 	t.Rules = map[string]Rule{}
 	t.States = map[string]States{}
 	rows, err := s.store.db.Query(`SELECT state, key, l0, l1, l2, confirm FROM rules WHERE thing = ?`, id)
