@@ -86,7 +86,7 @@ func OpenStore(path string) (*Store, error) {
 			validated TEXT NOT NULL DEFAULT '' -- kid of the validator key
 		);
 		CREATE TABLE IF NOT EXISTS revocations (
-			subject TEXT PRIMARY KEY, -- term:<id>, sub:<profile>, service:<kid>
+			subject TEXT PRIMARY KEY, -- term:<id>, sub:<profile>, sub:app:<id>
 			before  INTEGER NOT NULL  -- tokens issued before this time fall
 		);
 		CREATE TABLE IF NOT EXISTS state (
@@ -121,6 +121,19 @@ func OpenStore(path string) (*Store, error) {
 			confirm TEXT NOT NULL DEFAULT '',
 			PRIMARY KEY (thing, state, key)
 		);
+		-- App keys (§1.3): registered by the master, kid '' once retired. The
+		-- id is the app's identity (sub app:<id>), kept across its keys.
+		CREATE TABLE IF NOT EXISTS apps (
+			id         TEXT PRIMARY KEY,
+			name       TEXT NOT NULL UNIQUE, -- label: the app's name in the deployment
+			node       TEXT NOT NULL DEFAULT '',
+			kid        TEXT NOT NULL DEFAULT '',
+			raw        BLOB, -- Ed25519 public key
+			version    INTEGER NOT NULL, -- of the master's last message, ms
+			registered INTEGER NOT NULL,
+			last_token INTEGER NOT NULL DEFAULT 0
+		);
+		CREATE UNIQUE INDEX IF NOT EXISTS apps_kid ON apps (kid) WHERE kid != '';
 		CREATE TABLE IF NOT EXISTS active_states (
 			state TEXT PRIMARY KEY
 		);

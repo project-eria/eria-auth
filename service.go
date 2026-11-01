@@ -50,6 +50,7 @@ type Service struct {
 	kid        string
 	aud        string
 	challenges *auth.Challenges
+	deploy     []auth.PublicKey   // deployment keys: they register the app keys
 	notify     func(title string) // ntfy alert, fixed title per type (§4.5)
 	mu         sync.Mutex         // guards badCodes and orders
 	badCodes   []time.Time

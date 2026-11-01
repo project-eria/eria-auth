@@ -107,6 +107,10 @@ func main() {
 	if data, err := os.ReadFile(config.Roots); err != nil || !roots.AppendCertsFromPEM(data) {
 		zlog.Fatal().Str("file", config.Roots).Msg("[main] No deployment root (eria-manager tls-root)")
 	}
+	rootsPEM, _ := os.ReadFile(config.Roots)
+	if svc.deploy, err = auth.DeploymentKeys(rootsPEM); err != nil {
+		zlog.Fatal().Err(err).Str("file", config.Roots).Msg("[main] No deployment key in the roots")
+	}
 	ln, err := ListenTunnel(config.Listen, cert, roots)
 	if err != nil {
 		zlog.Fatal().Err(err).Msg("[main] Can't listen")

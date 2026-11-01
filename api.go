@@ -343,6 +343,14 @@ func (s *Service) Handler() http.Handler {
 	}) (any, error) {
 		return nil, s.SetRule(r.PathValue("id"), in.State, in.Key, in.Rule)
 	})))
+	// Apps (§1.3): their keys come from the master; the admin can only cut one off.
+	mux.HandleFunc("GET /v1/apps", admin(func(w http.ResponseWriter, r *http.Request) {
+		list, err := s.Apps()
+		reply(w, list, err)
+	}))
+	mux.HandleFunc("POST /v1/apps/{id}/retire", admin(func(w http.ResponseWriter, r *http.Request) {
+		reply(w, nil, s.RetireApp(r.PathValue("id")))
+	}))
 	mux.HandleFunc("POST /v1/simulate", admin(handle(func(r *http.Request, in SimulateIn) (any, error) {
 		return s.Simulate(in)
 	})))

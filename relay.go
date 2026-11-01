@@ -43,10 +43,11 @@ func (s *Service) RelayToken(r *http.Request, challenge string, sig []byte) (str
 	if err != nil {
 		return "", err
 	}
-	now := s.now()
-	lvl := 9
-	return auth.Sign(s.key, s.kid, auth.Claims{Iss: "auth", Aud: s.aud, Kind: auth.KindService, Lvl: &lvl,
-		Grants: grants, Iat: now.Unix(), Exp: now.Add(serviceTokenTTL).Unix(), Jti: randomID()})
+	sub := auth.AppSubject + "eria-ui-server-interieur"
+	if isOut(r) {
+		sub = auth.AppSubject + "eria-ui-server-exterieur"
+	}
+	return s.serviceToken(sub, grants, s.now())
 }
 
 func (s *Service) relayGrants() ([]string, error) {

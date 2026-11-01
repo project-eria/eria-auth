@@ -41,6 +41,22 @@ func (s *Service) ChannelHandler() http.Handler {
 		}
 		signedDoc(w, r, tok, d.Version, err)
 	})
+	// App keys from the master, and the service proofs of the apps (§1.3).
+	mux.HandleFunc("POST /v1/apps/keys", handle(func(r *http.Request, in auth.Signed) (any, error) {
+		return nil, s.RegisterAppKey(in)
+	}))
+	mux.HandleFunc("POST /v1/service/challenge", handle(func(r *http.Request, in struct{ Kid string }) (any, error) {
+		ch, err := s.ServiceChallenge(in.Kid)
+		return map[string]string{"challenge": ch}, err
+	}))
+	mux.HandleFunc("POST /v1/service/token", handle(func(r *http.Request, in struct {
+		Kid       string
+		Challenge string
+		Sig       []byte
+	}) (any, error) {
+		tok, err := s.ServiceToken(in.Kid, in.Challenge, in.Sig)
+		return map[string]string{"token": tok}, err
+	}))
 	mux.HandleFunc("PUT /v1/states", handle(func(r *http.Request, states []string) (any, error) {
 		return nil, s.SetActiveStates(states)
 	}))
