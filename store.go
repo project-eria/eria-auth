@@ -150,6 +150,7 @@ func OpenStore(path string) (*Store, error) {
 	db.Exec(`ALTER TABLE terminals ADD COLUMN device TEXT NOT NULL DEFAULT ''`)
 	db.Exec(`ALTER TABLE terminals ADD COLUMN validator INTEGER NOT NULL DEFAULT 0`)
 	db.Exec(`ALTER TABLE keys ADD COLUMN since INTEGER NOT NULL DEFAULT 0`) // a pending bio key: when it came
+	db.Exec(`ALTER TABLE things ADD COLUMN app TEXT NOT NULL DEFAULT ''`)   // id of the app that signs its TD (step 3d)
 	st := &Store{db: db, now: time.Now, changed: func() {}}
 	if err := st.migrateConfig(); err != nil {
 		return nil, err

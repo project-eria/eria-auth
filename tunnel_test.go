@@ -113,9 +113,9 @@ func TestTunnel(t *testing.T) {
 func TestRelayToken(t *testing.T) {
 	h := newHouse(t)
 	_, _, admin := h.bootstrapAdmin()
-	h.svc.ReceiveTD(TDIn{ID: "urn:eria:garage:1", Title: "Garage"})
-	h.svc.ReceiveTD(TDIn{ID: "urn:eria:meteo:1", Title: "Météo"})
-	h.svc.ReceiveTD(TDIn{ID: "urn:eria:new:1", Title: "Pas adopté"})
+	h.svc.ReceiveTD(TDIn{ID: "urn:eria:garage:1", Title: "Garage"}, "")
+	h.svc.ReceiveTD(TDIn{ID: "urn:eria:meteo:1", Title: "Météo"}, "")
+	h.svc.ReceiveTD(TDIn{ID: "urn:eria:new:1", Title: "Pas adopté"}, "")
 	require.NoError(t, h.svc.AdoptThing("urn:eria:garage:1"))
 	require.NoError(t, h.svc.AdoptThing("urn:eria:meteo:1"))
 	require.NoError(t, h.svc.SetZones("urn:eria:garage:1", []string{"garage"}))

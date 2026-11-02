@@ -1,7 +1,7 @@
 package main
 
 import (
-	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 	"sync"
@@ -12,8 +12,9 @@ import (
 )
 
 // The Things channel (§2.4, F017): plain HTTP without token, in the home
-// automation network, integrity by signature. A Thing sends its TD and pulls
-// its table and the revocation list; manager-contexts publishes the states.
+// automation network, integrity by signature. A Thing sends its TD, signed by
+// its app key, and pulls its table and the revocation list; manager-contexts
+// publishes the states, signed too.
 // Only a rate limit: everything served is public, and what comes in can
 // only add unclassified functions or close functions.
 
@@ -22,12 +23,12 @@ const maxTD = 64 << 10
 func (s *Service) ChannelHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/things/td", func(w http.ResponseWriter, r *http.Request) {
-		var td TDIn
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxTD)).Decode(&td); err != nil {
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 2*maxTD)) // base64 when signed
+		if err != nil {
 			reply(w, nil, ErrInvalid)
 			return
 		}
-		reply(w, nil, s.ReceiveTD(td))
+		reply(w, nil, s.ReceiveSignedTD(body))
 	})
 	mux.HandleFunc("GET /v1/things/{id}/table", func(w http.ResponseWriter, r *http.Request) {
 		tok, version, err := s.TableDoc(r.PathValue("id"))
@@ -57,9 +58,14 @@ func (s *Service) ChannelHandler() http.Handler {
 		tok, err := s.ServiceToken(in.Kid, in.Challenge, in.Sig)
 		return map[string]string{"token": tok}, err
 	}))
-	mux.HandleFunc("PUT /v1/states", handle(func(r *http.Request, states []string) (any, error) {
-		return nil, s.SetActiveStates(states)
-	}))
+	mux.HandleFunc("PUT /v1/states", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 16<<10))
+		if err != nil {
+			reply(w, nil, ErrInvalid)
+			return
+		}
+		reply(w, nil, s.ReceiveStates(body))
+	})
 	return limit(mux, 20, 50)
 }
 

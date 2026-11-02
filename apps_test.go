@@ -82,11 +82,14 @@ func TestAppKeys(t *testing.T) {
 	id := apps[0].ID
 	assert.Equal(t, auth.AppSubject+id, c.Sub)
 	assert.Equal(t, AppOut{ID: id, App: "manager-lights", Node: "rdc", Kid: a.kid, Registered: h.now.Unix(), LastToken: h.now.Unix()}, apps[0])
+	h.now = h.now.Add(time.Second)
+	require.Equal(t, 200, register(deployPriv, aPub, 2), "the master says it again (it restarted)")
+	assert.False(t, h.svc.revoked(c), "the same key: its tokens stay")
 
 	// The app moves: same id, the old key and its tokens fall; an old message replayed changes nothing.
 	h.now = h.now.Add(time.Second)
-	require.Equal(t, 200, register(deployPriv, bPub, 2))
-	assert.Equal(t, 403, register(deployPriv, aPub, 1), "replayed")
+	require.Equal(t, 200, register(deployPriv, bPub, 3))
+	assert.Equal(t, 403, register(deployPriv, aPub, 2), "replayed")
 	assert.True(t, h.svc.revoked(c), "the old key's token")
 	status, _ = token(a)
 	assert.Equal(t, 403, status)
@@ -115,4 +118,51 @@ func mustRevocations(t *testing.T, h *house) []string {
 		subjects = append(subjects, r.Subject)
 	}
 	return subjects
+}
+
+// Step 3d: a Thing belongs to the app that signs its TD; only the states app
+// publishes the states, signed, each version higher than the last.
+func TestSignedTDAndStates(t *testing.T) {
+	h := newHouse(t)
+	_, deployPriv, _ := ed25519.GenerateKey(rand.Reader)
+	deploy, _ := auth.ParsePublicKey(auth.Ed25519, deployPriv.Public().(ed25519.PublicKey))
+	h.svc.deploy = []auth.PublicKey{deploy}
+	h.svc.statesApp = "manager-contexts"
+	require.NoError(t, h.svc.SetContexts([]Context{{ID: "away", Label: "Absent"}}))
+	channel := httptest.NewServer(h.svc.ChannelHandler())
+	t.Cleanup(channel.Close)
+	h.srv.URL = channel.URL // the channel only
+	newApp := func(name string) ed25519.PrivateKey {
+		pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+		signed, _ := auth.SignDocument(deployPriv, auth.AppKeyPrefix,
+			auth.AppKey{App: name, Node: "rdc", Pubkey: base64.RawURLEncoding.EncodeToString(pub), Version: 1})
+		require.Equal(t, 200, h.call("POST", "/v1/apps/keys", "", signed, nil))
+		return priv
+	}
+	lights, contexts := newApp("manager-lights"), newApp("manager-contexts")
+	td := map[string]any{"id": "urn:eria:salon:1", "title": "Salon", "properties": map[string]any{"light": map[string]any{}}}
+	signed := func(key ed25519.PrivateKey, prefix string, v any) auth.SignedBy {
+		d, err := auth.SignBy(key, prefix, v)
+		require.NoError(t, err)
+		return d
+	}
+
+	assert.Equal(t, 200, h.call("POST", "/v1/things/td", "", td, nil), "a Thing nobody signed for takes a plain TD")
+	assert.Equal(t, 403, h.call("POST", "/v1/things/td", "", signed(lights, auth.StatesPrefix, td), nil), "another domain")
+	require.Equal(t, 200, h.call("POST", "/v1/things/td", "", signed(lights, auth.TDPrefix, td), nil))
+	th, err := h.svc.thing("urn:eria:salon:1")
+	require.NoError(t, err)
+	assert.NotEmpty(t, th.App, "the Thing belongs to manager-lights now")
+	assert.Equal(t, 403, h.call("POST", "/v1/things/td", "", td, nil), "plain TD once owned")
+	assert.Equal(t, 403, h.call("POST", "/v1/things/td", "", signed(contexts, auth.TDPrefix, td), nil), "another app")
+	assert.Equal(t, 200, h.call("POST", "/v1/things/td", "", signed(lights, auth.TDPrefix, td), nil))
+
+	states := func(v int64) auth.States { return auth.States{States: []string{"away"}, Version: v} }
+	assert.Equal(t, 403, h.call("PUT", "/v1/states", "", []string{"away"}, nil), "plain once the states app has a key")
+	assert.Equal(t, 403, h.call("PUT", "/v1/states", "", signed(lights, auth.StatesPrefix, states(1)), nil), "not the states app")
+	require.Equal(t, 200, h.call("PUT", "/v1/states", "", signed(contexts, auth.StatesPrefix, states(1)), nil))
+	assert.Equal(t, []string{"away"}, h.svc.activeStates())
+	assert.Equal(t, 403, h.call("PUT", "/v1/states", "", signed(contexts, auth.StatesPrefix, auth.States{Version: 1}), nil), "replayed")
+	assert.Equal(t, 200, h.call("PUT", "/v1/states", "", signed(contexts, auth.StatesPrefix, auth.States{Version: 2}), nil))
+	assert.Empty(t, h.svc.activeStates())
 }

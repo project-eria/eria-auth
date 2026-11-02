@@ -36,6 +36,7 @@ type ThingRecord struct {
 	Zones     []string          `json:"zones"`            // rooms (§2.2)
 	Adopted   bool              `json:"adopted"`          // has a table
 	Seen      int64             `json:"seen"`             // last TD received
+	App       string            `json:"app"`              // id of the app that signs its TD, "" before step 3
 	Rules     map[string]Rule   `json:"rules"`            // set by the admin
 	Defaults  map[string]Rule   `json:"defaults"`         // from the adopted capabilities
 	Effective auth.Table        `json:"effective"`        // what the Thing gets now
@@ -50,7 +51,7 @@ type Rule = auth.Rule
 type States = map[string]Rule
 
 var (
-	thingID  = regexp.MustCompile(`^[A-Za-z0-9:._-]{1,128}$`)
+	thingID  = regexp.MustCompile(`^[A-Za-z0-9:._@-]{1,128}$`) // @: app controllers, urn:eria:app:controler:<app>@<node>
 	nameRe   = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 	zoneRe   = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
 	maxFuncs = 200
@@ -117,7 +118,34 @@ func (td TDIn) types() []string {
 
 // ReceiveTD records the TD a Thing sent. A new Thing waits for the admin; an
 // adopted one whose capabilities changed is flagged.
-func (s *Service) ReceiveTD(td TDIn) error {
+// ReceiveSignedTD takes a TD as a Thing sends it: signed by its app key
+// (auth.SignedBy, step 3d), or plain from a Thing without a key yet.
+func (s *Service) ReceiveSignedTD(body []byte) error {
+	app := ""
+	var signed auth.SignedBy
+	if json.Unmarshal(body, &signed) == nil && signed.Kid != "" {
+		id, pub, err := s.appKey(signed.Kid)
+		if err != nil {
+			return ErrDenied
+		}
+		if body, err = signed.Verify(auth.TDPrefix, []auth.PublicKey{pub}); err != nil {
+			return ErrDenied
+		}
+		app = id
+	}
+	var td TDIn
+	if err := json.Unmarshal(body, &td); err != nil {
+		return ErrInvalid
+	}
+	return s.ReceiveTD(td, app)
+}
+
+// ReceiveTD records the TD of a Thing. The first app to sign it owns the
+// Thing: from then on only that app's TDs are taken.
+//
+// ponytail: a Thing nobody signed for still takes plain TDs (the ESP32 until
+// step 3e, the apps the agent did not install); refused once activated (step 5).
+func (s *Service) ReceiveTD(td TDIn, app string) error {
 	if !thingID.MatchString(td.ID) || len(td.Title) > 128 {
 		return Invalid("bad id or title")
 	}
@@ -129,8 +157,8 @@ func (s *Service) ReceiveTD(td TDIn) error {
 	old, err := s.thing(td.ID)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		_, err = s.store.db.Exec(`INSERT INTO things (id, title, seen_types, functions, seen) VALUES (?, ?, ?, ?, ?)`,
-			td.ID, td.Title, jsonText(types), jsonText(funcs), s.now().Unix())
+		_, err = s.store.db.Exec(`INSERT INTO things (id, title, seen_types, functions, seen, app) VALUES (?, ?, ?, ?, ?, ?)`,
+			td.ID, td.Title, jsonText(types), jsonText(funcs), s.now().Unix(), app)
 		if err == nil {
 			s.store.log("thing.new", td.ID)
 			s.mu.Lock()
@@ -146,11 +174,16 @@ func (s *Service) ReceiveTD(td TDIn) error {
 		return err
 	case err != nil:
 		return err
+	case old.App != "" && old.App != app:
+		return ErrDenied // another app, or a plain TD for a Thing that has one
 	}
-	_, err = s.store.db.Exec(`UPDATE things SET title = ?, seen_types = ?, functions = ?, seen = ? WHERE id = ?`,
-		td.Title, jsonText(types), jsonText(funcs), s.now().Unix(), td.ID)
+	_, err = s.store.db.Exec(`UPDATE things SET title = ?, seen_types = ?, functions = ?, seen = ?, app = ? WHERE id = ?`,
+		td.Title, jsonText(types), jsonText(funcs), s.now().Unix(), app, td.ID)
 	if err != nil {
 		return err
+	}
+	if old.App == "" && app != "" {
+		s.store.log("thing.app", td.ID+" signed by app "+app)
 	}
 	if !slices.Equal(old.Functions, funcs) || !slices.Equal(old.SeenTypes, types) {
 		s.store.log("thing.td", td.ID)
@@ -278,8 +311,8 @@ func jsonText(v any) string {
 func (s *Service) thing(id string) (ThingRecord, error) {
 	var t ThingRecord
 	var types, seen, funcs, zones string
-	err := s.store.db.QueryRow(`SELECT id, title, types, seen_types, functions, zones, adopted, seen FROM things WHERE id = ?`, id).
-		Scan(&t.ID, &t.Title, &types, &seen, &funcs, &zones, &t.Adopted, &t.Seen)
+	err := s.store.db.QueryRow(`SELECT id, title, types, seen_types, functions, zones, adopted, seen, app FROM things WHERE id = ?`, id).
+		Scan(&t.ID, &t.Title, &types, &seen, &funcs, &zones, &t.Adopted, &t.Seen, &t.App)
 	if errors.Is(err, sql.ErrNoRows) {
 		return t, ErrNotFound
 	}
@@ -518,12 +551,50 @@ func (s *Service) activeStates() []string {
 	return list
 }
 
-// SetActiveStates replaces the active states of the house, as
-// manager-contexts publishes its active contexts (the unknown ones left out); every Thing with an override of a state
-// gets a new table.
-//
-// ponytail: unsigned until the app keys (§4.7 step 3). An override only
-// restricts, so a forged state can only close functions.
+// ReceiveStates takes the states as the states app (manager-contexts)
+// publishes them: signed by its key, with a version higher than the last
+// one (auth.States). A plain list is taken only while that app has no key
+// here (generation 0): an override only restricts, so a forged state can
+// only close functions.
+func (s *Service) ReceiveStates(body []byte) error {
+	var signed auth.SignedBy
+	if json.Unmarshal(body, &signed) != nil || signed.Kid == "" {
+		var n int
+		s.store.db.QueryRow(`SELECT count(*) FROM apps WHERE name = ? AND kid != ''`, s.statesApp).Scan(&n)
+		if n > 0 {
+			return ErrDenied
+		}
+		var states []string
+		if json.Unmarshal(body, &states) != nil {
+			return ErrInvalid
+		}
+		return s.SetActiveStates(states)
+	}
+	var name string
+	var raw []byte
+	if s.store.db.QueryRow(`SELECT name, raw FROM apps WHERE kid = ?`, signed.Kid).Scan(&name, &raw) != nil || name != s.statesApp {
+		return ErrDenied
+	}
+	pub, err := auth.ParsePublicKey(auth.Ed25519, raw)
+	if err != nil {
+		return ErrDenied
+	}
+	var st auth.States
+	if signed.Open(auth.StatesPrefix, []auth.PublicKey{pub}, &st) != nil {
+		return ErrDenied
+	}
+	var last int64
+	s.store.db.QueryRow(`SELECT value FROM state WHERE key = 'states'`).Scan(&last)
+	if st.Version <= last {
+		return ErrDenied // replayed or older
+	}
+	s.store.db.Exec(`INSERT INTO state (key, value) VALUES ('states', ?)
+		ON CONFLICT (key) DO UPDATE SET value = excluded.value`, st.Version)
+	return s.SetActiveStates(st.States)
+}
+
+// SetActiveStates replaces the active states of the house (the unknown ones
+// left out); every Thing with an override of a state gets a new table.
 func (s *Service) SetActiveStates(states []string) error {
 	if len(states) > 64 {
 		return Invalid("too many states")

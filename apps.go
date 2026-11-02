@@ -47,9 +47,9 @@ func (s *Service) RegisterAppKey(signed auth.Signed) error {
 		}
 		kid, raw = pub.KID(), b
 	}
-	var id string
+	var id, held string
 	var version int64
-	err := s.store.db.QueryRow(`SELECT id, version FROM apps WHERE name = ?`, k.App).Scan(&id, &version)
+	err := s.store.db.QueryRow(`SELECT id, version, kid FROM apps WHERE name = ?`, k.App).Scan(&id, &version, &held)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		if kid == "" {
@@ -62,6 +62,10 @@ func (s *Service) RegisterAppKey(signed auth.Signed) error {
 		return err
 	case k.Version <= version:
 		return ErrDenied // replayed or older than the key held
+	case kid != "" && kid == held:
+		// The master says it again (it restarted): its tokens stay.
+		_, err = s.store.db.Exec(`UPDATE apps SET node = ?, version = ? WHERE id = ?`, k.Node, k.Version, id)
+		return err
 	default:
 		_, err = s.store.db.Exec(`UPDATE apps SET node = ?, kid = ?, raw = ?, version = ?, registered = ? WHERE id = ?`,
 			k.Node, kid, raw, k.Version, s.now().Unix(), id)

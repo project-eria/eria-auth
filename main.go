@@ -29,14 +29,15 @@ import (
 
 type AppConfig struct {
 	Database   string `yaml:"database" default:"eria-auth.db"`
-	KeyFile    string `yaml:"keyFile" default:"auth-ed25519.key"` // signing key, made by `eria-auth bootstrap`
-	Deployment string `yaml:"deployment" required:"true"`         // aud of the tokens: id of the house
-	Listen     string `yaml:"listen" default:":8443"`             // tunnel listener, for the relays
-	Channel    string `yaml:"channel" default:":8444"`            // Things channel: plain HTTP, home automation network only
-	Cert       string `yaml:"cert" default:"auth.crt"`            // TLS certificate, role "auth", signed by the master
-	CertKey    string `yaml:"certKey" default:"auth-tls.key"`     // its private key, made by `eria-auth csr`
-	Roots      string `yaml:"roots" default:"roots.pem"`          // deployment roots (eria-manager tls-root)
-	Ntfy       string `yaml:"ntfy"`                               // ntfy topic URL for the alerts
+	KeyFile    string `yaml:"keyFile" default:"auth-ed25519.key"`   // signing key, made by `eria-auth bootstrap`
+	Deployment string `yaml:"deployment" required:"true"`           // aud of the tokens: id of the house
+	Listen     string `yaml:"listen" default:":8443"`               // tunnel listener, for the relays
+	Channel    string `yaml:"channel" default:":8444"`              // Things channel: plain HTTP, home automation network only
+	Cert       string `yaml:"cert" default:"auth.crt"`              // TLS certificate, role "auth", signed by the master
+	CertKey    string `yaml:"certKey" default:"auth-tls.key"`       // its private key, made by `eria-auth csr`
+	Roots      string `yaml:"roots" default:"roots.pem"`            // deployment roots (eria-manager tls-root)
+	Ntfy       string `yaml:"ntfy"`                                 // ntfy topic URL for the alerts
+	StatesApp  string `yaml:"statesApp" default:"manager-contexts"` // the app that publishes the house states, its name in the deployment
 	// Backups (§4.2): the master's action storeAuthBackup, and the age public
 	// key of its backup key (eria-manager auth-secrets).
 	BackupURL       string `yaml:"backupURL" required:"true"`
@@ -85,6 +86,7 @@ func main() {
 	}
 	svc := NewService(store, pepper, key, config.Deployment)
 	svc.notify = ntfy(config.Ntfy)
+	svc.statesApp = config.StatesApp
 	if err := svc.SeedConfig(config.Contexts, config.Hide); err != nil {
 		zlog.Fatal().Err(err).Msg("[main] Can't store the first settings")
 	}

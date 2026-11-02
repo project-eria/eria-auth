@@ -51,6 +51,7 @@ type Service struct {
 	aud        string
 	challenges *auth.Challenges
 	deploy     []auth.PublicKey   // deployment keys: they register the app keys
+	statesApp  string             // the app whose signed states auth takes (§2.5)
 	notify     func(title string) // ntfy alert, fixed title per type (§4.5)
 	mu         sync.Mutex         // guards badCodes and orders
 	badCodes   []time.Time
