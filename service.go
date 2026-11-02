@@ -58,12 +58,13 @@ type Service struct {
 	orders     map[string]*pendingOrder // orders to the master, waiting for the phone
 	floodAt    time.Time                // last « too many requests » alert, one per 10 min
 	newAt      time.Time                // last « new device » alert, one per 10 min
+	relayToken map[string]int64         // last service token of each eria-ui-server, unix
 }
 
 func NewService(store *Store, pepper []byte, key ed25519.PrivateKey, aud string) *Service {
 	pub, _ := auth.ParsePublicKey(auth.Ed25519, key.Public().(ed25519.PublicKey))
 	return &Service{store: store, hasher: Hasher{pepper}, key: key, kid: pub.KID(), aud: aud,
-		challenges: auth.NewChallenges(time.Minute, 4096), notify: func(string) {},
+		challenges: auth.NewChallenges(time.Minute, 4096), notify: func(string) {}, relayToken: map[string]int64{},
 		orders: map[string]*pendingOrder{}}
 }
 

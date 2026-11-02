@@ -24,6 +24,7 @@ type AppOut struct {
 	Kid        string `json:"kid"` // "" once retired
 	Registered int64  `json:"registered"`
 	LastToken  int64  `json:"lastToken"`
+	Things     int    `json:"things"` // Things whose TD it signed (step 3d)
 }
 
 // RegisterAppKey applies an AppKey signed by a deployment key (JSON of
@@ -124,7 +125,8 @@ func (s *Service) serviceToken(sub string, grants []string, now time.Time) (stri
 
 // Apps lists the registered apps, for the admin.
 func (s *Service) Apps() ([]AppOut, error) {
-	rows, err := s.store.db.Query(`SELECT id, name, node, kid, registered, last_token FROM apps ORDER BY name`)
+	rows, err := s.store.db.Query(`SELECT id, name, node, kid, registered, last_token,
+		(SELECT count(*) FROM things WHERE things.app = apps.id) FROM apps ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +134,7 @@ func (s *Service) Apps() ([]AppOut, error) {
 	list := []AppOut{}
 	for rows.Next() {
 		var a AppOut
-		if err := rows.Scan(&a.ID, &a.App, &a.Node, &a.Kid, &a.Registered, &a.LastToken); err != nil {
+		if err := rows.Scan(&a.ID, &a.App, &a.Node, &a.Kid, &a.Registered, &a.LastToken, &a.Things); err != nil {
 			return nil, err
 		}
 		list = append(list, a)
@@ -153,4 +155,32 @@ func (s *Service) RetireApp(id string) error {
 	s.revoke("sub:" + auth.AppSubject + id)
 	s.store.log("app.retired", "by the admin, id "+id)
 	return nil
+}
+
+// ReleaseThings frees the Things of a retired app: the next app to sign their
+// TD owns them (its replacement). Refused while the app holds a key: it
+// would take them back at once.
+func (s *Service) ReleaseThings(id string) (int, error) {
+	var kid string
+	if err := s.store.db.QueryRow(`SELECT kid FROM apps WHERE id = ?`, id).Scan(&kid); err != nil {
+		return 0, ErrNotFound
+	}
+	if kid != "" {
+		return 0, Invalid("cut the app first")
+	}
+	res, err := s.store.db.Exec(`UPDATE things SET app = '' WHERE app = ?`, id)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	s.store.log("app.released", fmt.Sprintf("%d Things of app %s", n, id))
+	return int(n), nil
+}
+
+// RelayTokens says when each eria-ui-server last got its service token
+// (unix, 0: never since auth started).
+func (s *Service) RelayTokens() map[string]int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return map[string]int64{"interieur": s.relayToken["interieur"], "exterieur": s.relayToken["exterieur"]}
 }

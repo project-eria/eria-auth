@@ -157,6 +157,21 @@ func TestSignedTDAndStates(t *testing.T) {
 	assert.Equal(t, 403, h.call("POST", "/v1/things/td", "", signed(contexts, auth.TDPrefix, td), nil), "another app")
 	assert.Equal(t, 200, h.call("POST", "/v1/things/td", "", signed(lights, auth.TDPrefix, td), nil))
 
+	// Release: only once the app is cut; then the next app to sign takes them.
+	apps, err := h.svc.Apps()
+	require.NoError(t, err)
+	assert.Equal(t, "manager-lights", apps[1].App)
+	assert.Equal(t, 1, apps[1].Things)
+	_, err = h.svc.ReleaseThings(apps[1].ID)
+	assert.Error(t, err, "an app with a key would take them back")
+	require.NoError(t, h.svc.RetireApp(apps[1].ID))
+	n, err := h.svc.ReleaseThings(apps[1].ID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+	assert.Equal(t, 200, h.call("POST", "/v1/things/td", "", signed(contexts, auth.TDPrefix, td), nil), "taken by its replacement")
+	th, _ = h.svc.thing("urn:eria:salon:1")
+	assert.Equal(t, apps[0].ID, th.App)
+
 	states := func(v int64) auth.States { return auth.States{States: []string{"away"}, Version: v} }
 	assert.Equal(t, 403, h.call("PUT", "/v1/states", "", []string{"away"}, nil), "plain once the states app has a key")
 	assert.Equal(t, 403, h.call("PUT", "/v1/states", "", signed(lights, auth.StatesPrefix, states(1)), nil), "not the states app")

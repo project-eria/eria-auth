@@ -351,6 +351,13 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/apps/{id}/retire", admin(func(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, s.RetireApp(r.PathValue("id")))
 	}))
+	mux.HandleFunc("POST /v1/apps/{id}/release", admin(func(w http.ResponseWriter, r *http.Request) {
+		n, err := s.ReleaseThings(r.PathValue("id"))
+		reply(w, map[string]int{"released": n}, err)
+	}))
+	mux.HandleFunc("GET /v1/apps/servers", admin(func(w http.ResponseWriter, r *http.Request) {
+		reply(w, s.RelayTokens(), nil)
+	}))
 	mux.HandleFunc("POST /v1/simulate", admin(handle(func(r *http.Request, in SimulateIn) (any, error) {
 		return s.Simulate(in)
 	})))
