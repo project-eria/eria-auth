@@ -20,7 +20,7 @@ import (
 
 const (
 	domainRelayToken = "eria-relay-token-v1"
-	serviceTokenTTL  = 4 * time.Hour
+	serviceTokenTTL  = 15 * time.Minute
 )
 
 // RelayChallenge issues a challenge for the key of the relay carrying r.

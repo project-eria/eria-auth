@@ -75,7 +75,7 @@ func TestAppKeys(t *testing.T) {
 	assert.Equal(t, auth.KindService, c.Kind)
 	assert.Equal(t, 9, *c.Lvl)
 	assert.Empty(t, c.Grants, "grants come with step 4")
-	assert.Equal(t, int64(4*3600), c.Exp-c.Iat)
+	assert.Equal(t, int64(15*60), c.Exp-c.Iat)
 	var apps []AppOut
 	require.Equal(t, 200, h.call("GET", "/v1/apps", admin, nil, &apps))
 	require.Len(t, apps, 1)
