@@ -22,12 +22,12 @@ import (
 
 // AppOut is an app as the admin screens show it.
 type AppOut struct {
-	ID         string `json:"id"`
-	App        string `json:"app"`
-	Node       string `json:"node"`
-	Kid        string `json:"kid"` // "" once retired
-	Registered int64  `json:"registered"`
-	LastToken  int64  `json:"lastToken"`
+	ID         string   `json:"id"`
+	App        string   `json:"app"`
+	Node       string   `json:"node"`
+	Kid        string   `json:"kid"` // "" once retired
+	Registered int64    `json:"registered"`
+	LastToken  int64    `json:"lastToken"`
 	Things     int      `json:"things"` // Things whose TD it signed (step 3d)
 	Grants     []string `json:"grants"` // accepted at its deployment (step 4)
 }

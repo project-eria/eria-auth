@@ -98,6 +98,7 @@ func main() {
 		zlog.Fatal().Err(err).Msg("[main] Bad backupRecipient")
 	}
 	go backup.Run()
+	go svc.WatchThings(nil)
 	backup.Changed() // a first backup at each start
 	zlog.Info().Str("fingerprint", svc.kid).Msg("[main] auth key (compare with eria-manager auth-keyset)")
 

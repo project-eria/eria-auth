@@ -43,6 +43,14 @@ func (s *Service) ChannelHandler() http.Handler {
 		w.Header().Set("Content-Type", "application/jwt")
 		w.Write([]byte(tok))
 	})
+	mux.HandleFunc("POST /v1/heartbeat/ack", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxTD))
+		if err != nil {
+			reply(w, nil, ErrInvalid)
+			return
+		}
+		reply(w, nil, s.ReceiveAck(body))
+	})
 	mux.HandleFunc("GET /v1/revocation", func(w http.ResponseWriter, r *http.Request) {
 		tok, err := s.RevocationDoc()
 		var d auth.Doc
