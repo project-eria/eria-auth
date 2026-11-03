@@ -35,13 +35,13 @@ type Backup struct {
 // BackupPrefix is the domain of the signature on a backup.
 const BackupPrefix = "eria-backup-v1"
 
-func NewBackup(store *Store, key ed25519.PrivateKey, kid, url, recipient string) (*Backup, error) {
+func NewBackup(store *Store, key ed25519.PrivateKey, kid, url, recipient string, client *http.Client) (*Backup, error) {
 	r, err := age.ParseX25519Recipient(recipient)
 	if err != nil {
 		return nil, err
 	}
 	b := &Backup{store: store, key: key, kid: kid, url: url, recipient: r,
-		client: &http.Client{Timeout: 30 * time.Second}, changed: make(chan struct{}, 1)}
+		client: client, changed: make(chan struct{}, 1)}
 	store.changed = b.Changed
 	return b, nil
 }

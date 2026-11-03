@@ -24,6 +24,7 @@ import (
 
 	eria "github.com/project-eria/eria-core"
 	"github.com/project-eria/go-wot/auth"
+	"github.com/project-eria/go-wot/inventory"
 	zlog "github.com/rs/zerolog/log"
 )
 
@@ -93,7 +94,14 @@ func main() {
 	if err := svc.CheckClock(); err != nil {
 		zlog.Fatal().Err(err).Msg("[main] Clock behind the last version issued")
 	}
-	backup, err := NewBackup(store, key, svc.kid, config.BackupURL, config.BackupRecipient)
+	// The master is reached with its certificate checked against the
+	// deployment roots (role maitre) once it serves HTTPS (§4.7 step 5d).
+	rootsPEM, _ := os.ReadFile(config.Roots)
+	master, err := inventory.MasterClient(rootsPEM, 30*time.Second)
+	if err != nil {
+		zlog.Fatal().Err(err).Str("file", config.Roots).Msg("[main] Bad deployment roots")
+	}
+	backup, err := NewBackup(store, key, svc.kid, config.BackupURL, config.BackupRecipient, master)
 	if err != nil {
 		zlog.Fatal().Err(err).Msg("[main] Bad backupRecipient")
 	}
@@ -110,7 +118,6 @@ func main() {
 	if data, err := os.ReadFile(config.Roots); err != nil || !roots.AppendCertsFromPEM(data) {
 		zlog.Fatal().Str("file", config.Roots).Msg("[main] No deployment root (eria-manager tls-root)")
 	}
-	rootsPEM, _ := os.ReadFile(config.Roots)
 	if svc.deploy, err = auth.DeploymentKeys(rootsPEM); err != nil {
 		zlog.Fatal().Err(err).Str("file", config.Roots).Msg("[main] No deployment key in the roots")
 	}

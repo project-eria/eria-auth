@@ -30,7 +30,7 @@ func TestBackup(t *testing.T) {
 	}))
 	defer master.Close()
 
-	b, err := NewBackup(h.svc.store, h.svc.key, h.svc.kid, master.URL, identity.Recipient().String())
+	b, err := NewBackup(h.svc.store, h.svc.key, h.svc.kid, master.URL, identity.Recipient().String(), master.Client())
 	require.NoError(t, err)
 	require.NoError(t, b.Send())
 
