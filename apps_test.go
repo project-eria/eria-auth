@@ -202,33 +202,45 @@ func TestAppGrants(t *testing.T) {
 		require.NoError(t, err)
 		return h.svc.RegisterAppKey(signed)
 	}
-	token := func() auth.Claims {
+	token := func(thing string) auth.Claims {
 		ch, err := h.svc.ServiceChallenge(key.KID())
 		require.NoError(t, err)
-		tok, err := h.svc.ServiceToken(key.KID(), ch, ed25519.Sign(priv, auth.ServiceProof(ch, h.svc.kid)))
+		tok, err := h.svc.ServiceToken(key.KID(), ch, ed25519.Sign(priv, auth.ServiceProof(ch, h.svc.kid)), thing)
 		require.NoError(t, err)
 		return h.claims(tok)
 	}
-
-	assert.ErrorIs(t, register("piscine:*"), ErrInvalid, "outside the grammar")
-	require.NoError(t, register("room:piscine:*"))
-	c := token()
-	assert.Equal(t, []string{"room:piscine:*"}, c.Grants)
-	assert.Equal(t, int64(15*60), c.Exp-c.Iat)
-
-	// A grant added: the tokens stay. On the garage's open (confirmable): 5 min.
 	require.NoError(t, h.svc.ReceiveTD(mustTD(t, garageTD), ""))
 	require.NoError(t, h.svc.AdoptThing("urn:eria:garage:1"))
+	require.NoError(t, h.svc.SetZones("urn:eria:garage:1", []string{"garage"}))
+	const garage = "urn:eria:garage:1"
+
+	assert.ErrorIs(t, register("piscine:*"), ErrInvalid, "outside the grammar")
+	require.NoError(t, register("room:piscine:*", "room:garage:read"))
+	c := token("")
+	assert.Empty(t, c.Grants, "the master's token: no grants")
+	assert.Empty(t, c.Thing)
+	// Step 4e: the token is for one Thing, with the grants on it only;
+	// the DNS-SD instance (the id without "urn:") names it too.
+	c = token("eria:garage:1")
+	assert.Equal(t, garage, c.Thing)
+	assert.Equal(t, []string{"room:garage:read"}, c.Grants)
+	assert.Equal(t, int64(15*60), c.Exp-c.Iat)
+	ch, _ := h.svc.ServiceChallenge(key.KID())
+	_, err := h.svc.ServiceToken(key.KID(), ch, ed25519.Sign(priv, auth.ServiceProof(ch, h.svc.kid)), "urn:eria:nowhere")
+	assert.ErrorIs(t, err, ErrNotFound, "a Thing auth doesn't know")
+
+	// A grant added: the tokens stay. On the garage's open (confirmable): 5 min.
 	h.now = h.now.Add(time.Second)
-	require.NoError(t, register("room:piscine:*", "thing:urn:eria:garage:1:invoke"))
+	require.NoError(t, register("room:piscine:*", "room:garage:read", "thing:"+garage+":invoke"))
 	assert.False(t, h.svc.revoked(c))
-	c = token()
+	c = token(garage)
 	assert.Equal(t, int64(5*60), c.Exp-c.Iat)
-	require.NoError(t, register("room:piscine:*", "thing:urn:eria:garage:1:read"))
+	require.NoError(t, register("room:piscine:*", "thing:"+garage+":read"))
 	assert.True(t, h.svc.revoked(c), "a grant removed")
 	h.now = h.now.Add(time.Second)
-	c = token()
+	c = token(garage)
 	assert.Equal(t, int64(15*60), c.Exp-c.Iat, "reading is never confirmed")
+	assert.Equal(t, []string{"thing:" + garage + ":read"}, c.Grants)
 	assert.False(t, h.svc.revoked(c), "the next token carries the new set")
 }
 

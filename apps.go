@@ -134,29 +134,57 @@ func (s *Service) ServiceChallenge(kid string) (string, error) {
 }
 
 // ServiceToken checks the app's signature over auth.ServiceProof and issues
-// its service token.
-func (s *Service) ServiceToken(kid, challenge string, sig []byte) (string, error) {
+// its service token for thing (step 4e): its TD id, or its DNS-SD instance
+// (the id without "urn:"), read from the master's inventory. thing "" is the
+// master's token: no grants, it only reads the inventory.
+func (s *Service) ServiceToken(kid, challenge string, sig []byte, thing string) (string, error) {
 	id, pub, err := s.appKey(kid)
 	if err != nil || !s.challenges.Redeem(challenge, pub, auth.ServiceProof(challenge, s.kid), sig) {
 		return "", ErrDenied
 	}
-	var raw string
-	s.store.db.QueryRow(`SELECT grants FROM apps WHERE id = ?`, id).Scan(&raw)
-	var grants []string
-	json.Unmarshal([]byte(raw), &grants)
+	if thing != "" {
+		t, err := s.thing(thing)
+		if errors.Is(err, ErrNotFound) {
+			t, err = s.thing("urn:" + thing)
+		}
+		if err != nil {
+			return "", err
+		}
+		thing = t.ID
+	}
 	now := s.now()
 	s.store.db.Exec(`UPDATE apps SET last_token = ? WHERE id = ?`, now.Unix(), id)
-	return s.serviceToken(auth.AppSubject+id, grants, now)
+	return s.appToken(id, thing, now)
 }
 
-func (s *Service) serviceToken(sub string, grants []string, now time.Time) (string, error) {
+// appToken is the token of app id for thing, carrying only the app's
+// grants on it: smaller, and worthless at any other Thing.
+func (s *Service) appToken(id, thing string, now time.Time) (string, error) {
+	var raw string
+	s.store.db.QueryRow(`SELECT grants FROM apps WHERE id = ?`, id).Scan(&raw)
+	var all, grants []string
+	json.Unmarshal([]byte(raw), &all)
+	if thing != "" {
+		t, _ := s.thing(thing)
+		for _, g := range all {
+			scope, rest, _ := strings.Cut(g, ":")
+			selector := rest[:strings.LastIndexByte(rest, ':')] // grammar checked at registration
+			if scope == "thing" && selector == t.ID || scope == "room" && slices.Contains(t.Zones, selector) {
+				grants = append(grants, g)
+			}
+		}
+	}
+	return s.serviceToken(auth.AppSubject+id, thing, grants, now)
+}
+
+func (s *Service) serviceToken(sub, thing string, grants []string, now time.Time) (string, error) {
 	lvl := 9
 	ttl := serviceTokenTTL
 	if s.grantsConfirmable(grants) {
 		ttl = confirmableTokenTTL
 	}
 	return auth.Sign(s.key, s.kid, auth.Claims{Iss: "auth", Aud: s.aud, Kind: auth.KindService, Sub: sub, Lvl: &lvl,
-		Grants: grants, Iat: now.Unix(), Exp: now.Add(ttl).Unix(), Jti: randomID()})
+		Grants: grants, Thing: thing, Iat: now.Unix(), Exp: now.Add(ttl).Unix(), Jti: randomID()})
 }
 
 // grantsConfirmable tells whether an exact grant covers a confirmable

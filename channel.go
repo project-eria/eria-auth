@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
@@ -55,8 +54,9 @@ func (s *Service) ChannelHandler() http.Handler {
 		Kid       string
 		Challenge string
 		Sig       []byte
+		Thing     string // the Thing it is for; "" for the master
 	}) (any, error) {
-		tok, err := s.ServiceToken(in.Kid, in.Challenge, in.Sig)
+		tok, err := s.ServiceToken(in.Kid, in.Challenge, in.Sig, in.Thing)
 		return map[string]string{"token": tok}, err
 	}))
 	mux.HandleFunc("PUT /v1/states", func(w http.ResponseWriter, r *http.Request) {
@@ -171,13 +171,11 @@ func (s *Service) Simulate(in SimulateIn) (SimulateOut, error) {
 	}
 	var tok string
 	if in.App != "" {
-		var raw string
-		if s.store.db.QueryRow(`SELECT grants FROM apps WHERE id = ? AND kid != ''`, in.App).Scan(&raw) != nil {
+		var kid string
+		if s.store.db.QueryRow(`SELECT kid FROM apps WHERE id = ? AND kid != ''`, in.App).Scan(&kid) != nil {
 			return SimulateOut{}, ErrNotFound
 		}
-		var grants []string
-		json.Unmarshal([]byte(raw), &grants)
-		tok, err = s.serviceToken(auth.AppSubject+in.App, grants, s.now())
+		tok, err = s.appToken(in.App, th.ID, s.now())
 	} else {
 		tok, err = s.issue(t, p, in.Out, terminalTokenTTL)
 	}

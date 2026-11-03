@@ -52,7 +52,7 @@ func (s *Service) RelayToken(r *http.Request, challenge string, sig []byte) (str
 	s.mu.Lock()
 	s.relayToken[which] = s.now().Unix()
 	s.mu.Unlock()
-	return s.serviceToken(auth.AppSubject+"eria-ui-server-"+which, grants, s.now())
+	return s.serviceToken(auth.AppSubject+"eria-ui-server-"+which, "", grants, s.now())
 }
 
 func (s *Service) relayGrants() ([]string, error) {
