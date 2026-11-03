@@ -76,4 +76,25 @@ func TestPersonGrants(t *testing.T) {
 	assert.NotContains(t, h.alert, "Un appareil entre dans une pièce couverte par un droit")
 	require.NoError(t, h.svc.SetZones("urn:eria:garage:1", []string{"cave", "garage"}))
 	assert.Contains(t, h.alert, "Un appareil entre dans une pièce couverte par un droit")
+
+	// The simulator names the grant that allowed it (step 4d): the closed
+	// state needs level 1 off the garage.
+	all, err := h.svc.Grants()
+	require.NoError(t, err)
+	assert.Equal(t, []Grant{{Profile: lea.ID, Grant: "room:garage:read", Added: h.now.Unix()},
+		{Profile: lea.ID, Grant: "thing:urn:eria:garage:1:invoke", Expires: list[1].Expires, Added: list[1].Added, Confirmable: true}}, all)
+	terms, err := h.svc.Terminals()
+	require.NoError(t, err)
+	out, err := h.svc.Simulate(SimulateIn{Terminal: terms[0].ID, Profile: lea.ID, Thing: "urn:eria:garage:1", Key: "property/closed/read"})
+	require.NoError(t, err)
+	assert.Equal(t, SimulateOut{Allow: true, Level: 2, Grant: "room:garage:read", WithoutStep: 7}, out)
+	// An app: its accepted grants, its service token.
+	_, err = h.svc.store.db.Exec(`INSERT INTO apps (id, name, kid, raw, version, registered, grants) VALUES ('a1', 'pool', 'k1', x'00', 1, 1, '["thing:urn:eria:garage:1:read"]')`)
+	require.NoError(t, err)
+	out, err = h.svc.Simulate(SimulateIn{App: "a1", Thing: "urn:eria:garage:1", Key: "property/closed/read"})
+	require.NoError(t, err)
+	assert.Equal(t, SimulateOut{Allow: true, Level: 9, Grant: "thing:urn:eria:garage:1:read", WithoutStep: 7}, out)
+	out, err = h.svc.Simulate(SimulateIn{App: "a1", Thing: "urn:eria:garage:1", Key: "action/open/invoke"})
+	require.NoError(t, err)
+	assert.False(t, out.Allow)
 }

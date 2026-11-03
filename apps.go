@@ -28,7 +28,8 @@ type AppOut struct {
 	Kid        string `json:"kid"` // "" once retired
 	Registered int64  `json:"registered"`
 	LastToken  int64  `json:"lastToken"`
-	Things     int    `json:"things"` // Things whose TD it signed (step 3d)
+	Things     int      `json:"things"` // Things whose TD it signed (step 3d)
+	Grants     []string `json:"grants"` // accepted at its deployment (step 4)
 }
 
 // RegisterAppKey applies an AppKey signed by a deployment key (JSON of
@@ -183,7 +184,7 @@ func (s *Service) grantsConfirmable(grants []string) bool {
 
 // Apps lists the registered apps, for the admin.
 func (s *Service) Apps() ([]AppOut, error) {
-	rows, err := s.store.db.Query(`SELECT id, name, node, kid, registered, last_token,
+	rows, err := s.store.db.Query(`SELECT id, name, node, kid, registered, last_token, grants,
 		(SELECT count(*) FROM things WHERE things.app = apps.id) FROM apps ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -192,8 +193,13 @@ func (s *Service) Apps() ([]AppOut, error) {
 	list := []AppOut{}
 	for rows.Next() {
 		var a AppOut
-		if err := rows.Scan(&a.ID, &a.App, &a.Node, &a.Kid, &a.Registered, &a.LastToken, &a.Things); err != nil {
+		var grants string
+		if err := rows.Scan(&a.ID, &a.App, &a.Node, &a.Kid, &a.Registered, &a.LastToken, &grants, &a.Things); err != nil {
 			return nil, err
+		}
+		json.Unmarshal([]byte(grants), &a.Grants)
+		if a.Grants == nil {
+			a.Grants = []string{}
 		}
 		list = append(list, a)
 	}

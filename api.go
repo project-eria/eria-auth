@@ -207,6 +207,10 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/profiles/{id}", admin(func(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, s.DeleteProfile(pathID(r)))
 	}))
+	mux.HandleFunc("GET /v1/grants", admin(func(w http.ResponseWriter, r *http.Request) {
+		list, err := s.Grants()
+		reply(w, list, err)
+	}))
 	mux.HandleFunc("GET /v1/profiles/{id}/grants", admin(func(w http.ResponseWriter, r *http.Request) {
 		list, err := s.ProfileGrants(pathID(r))
 		reply(w, list, err)

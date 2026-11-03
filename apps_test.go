@@ -82,7 +82,7 @@ func TestAppKeys(t *testing.T) {
 	require.Len(t, apps, 1)
 	id := apps[0].ID
 	assert.Equal(t, auth.AppSubject+id, c.Sub)
-	assert.Equal(t, AppOut{ID: id, App: "manager-lights", Node: "rdc", Kid: a.kid, Registered: h.now.Unix(), LastToken: h.now.Unix()}, apps[0])
+	assert.Equal(t, AppOut{ID: id, App: "manager-lights", Node: "rdc", Kid: a.kid, Registered: h.now.Unix(), LastToken: h.now.Unix(), Grants: []string{}}, apps[0])
 	h.now = h.now.Add(time.Second)
 	require.Equal(t, 200, register(deployPriv, aPub, 2), "the master says it again (it restarted)")
 	assert.False(t, h.svc.revoked(c), "the same key: its tokens stay")

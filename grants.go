@@ -20,6 +20,7 @@ const grantMaxAge = 90 * 24 * time.Hour
 
 // Grant is a person's grant as the admin screens show it.
 type Grant struct {
+	Profile     int64  `json:"profile"`
 	Grant       string `json:"grant"`
 	Expires     int64  `json:"expires"` // unix, 0: never
 	Added       int64  `json:"added"`
@@ -31,14 +32,21 @@ func (s *Service) ProfileGrants(id int64) ([]Grant, error) {
 	if _, _, err := s.profile(id); err != nil {
 		return nil, err
 	}
-	rows, err := s.store.db.Query(`SELECT grant, expires, added FROM grants WHERE profile = ? ORDER BY grant`, id)
+	return s.grants(`WHERE profile = ?`, id)
+}
+
+// Grants lists the grants of every profile, for the admin screens.
+func (s *Service) Grants() ([]Grant, error) { return s.grants("") }
+
+func (s *Service) grants(where string, args ...any) ([]Grant, error) {
+	rows, err := s.store.db.Query(`SELECT profile, grant, expires, added FROM grants `+where+` ORDER BY profile, grant`, args...)
 	if err != nil {
 		return nil, err
 	}
 	list := []Grant{}
 	for rows.Next() {
 		var g Grant
-		rows.Scan(&g.Grant, &g.Expires, &g.Added)
+		rows.Scan(&g.Profile, &g.Grant, &g.Expires, &g.Added)
 		list = append(list, g)
 	}
 	rows.Close() // one connection: read the tables after
@@ -62,7 +70,7 @@ func (s *Service) AddGrant(id int64, grant string, expires int64) (Grant, error)
 		return Grant{}, Invalid("grant: <thing|room>:<selector>:<read|write|invoke|*>")
 	}
 	now := s.now()
-	g := Grant{Grant: grant, Expires: expires, Added: now.Unix(), Confirmable: s.grantsConfirmable([]string{grant})}
+	g := Grant{Profile: id, Grant: grant, Expires: expires, Added: now.Unix(), Confirmable: s.grantsConfirmable([]string{grant})}
 	if g.Confirmable && (g.Expires == 0 || g.Expires > now.Add(grantMaxAge).Unix()) {
 		g.Expires = now.Add(grantMaxAge).Unix()
 	}

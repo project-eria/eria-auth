@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
@@ -114,8 +115,10 @@ func limit(h http.Handler, perSecond, burst float64) http.Handler {
 // --- Simulator (F106) ---
 
 // SimulateIn is a question of the admin: this terminal, this profile (0:
-// signed out), from outside or not, this function of this Thing.
+// signed out), from outside or not, this function of this Thing. With App
+// (an app id), its service token instead: no terminal, no profile.
 type SimulateIn struct {
+	App      string `json:"app"`
 	Terminal string `json:"terminal"`
 	Profile  int64  `json:"profile"`
 	Out      bool   `json:"out"`
@@ -129,18 +132,26 @@ type SimulateOut struct {
 	Step   int    `json:"step"`
 	Reason string `json:"reason"`
 	Level  int    `json:"level"` // level the token carries
+	// The grant that made it allowed: denied without it ("" when the level
+	// was enough), and the step it would have ended at then.
+	Grant       string `json:"grant,omitempty"`
+	WithoutStep int    `json:"withoutStep,omitempty"`
 }
 
 // Simulate runs the decision of the Thing on the token auth would issue
 // now, with the Thing's effective table. A confirmation is never given: a
 // command that needs one ends at step 8.
 func (s *Service) Simulate(in SimulateIn) (SimulateOut, error) {
-	t, err := s.terminal(in.Terminal)
+	var t Terminal
+	var err error
+	if in.App == "" {
+		t, err = s.terminal(in.Terminal)
+	}
 	if err != nil {
 		return SimulateOut{}, err
 	}
 	var p *Profile
-	if in.Profile != 0 {
+	if in.Profile != 0 && in.App == "" {
 		prof, _, err := s.profile(in.Profile)
 		if err != nil {
 			return SimulateOut{}, err
@@ -158,7 +169,18 @@ func (s *Service) Simulate(in SimulateIn) (SimulateOut, error) {
 	if kind == "" {
 		return SimulateOut{}, Invalid("bad function")
 	}
-	tok, err := s.issue(t, p, in.Out, terminalTokenTTL)
+	var tok string
+	if in.App != "" {
+		var raw string
+		if s.store.db.QueryRow(`SELECT grants FROM apps WHERE id = ? AND kid != ''`, in.App).Scan(&raw) != nil {
+			return SimulateOut{}, ErrNotFound
+		}
+		var grants []string
+		json.Unmarshal([]byte(raw), &grants)
+		tok, err = s.serviceToken(auth.AppSubject+in.App, grants, s.now())
+	} else {
+		tok, err = s.issue(t, p, in.Out, terminalTokenTTL)
+	}
 	if err != nil {
 		return SimulateOut{}, err
 	}
@@ -174,15 +196,36 @@ func (s *Service) Simulate(in SimulateIn) (SimulateOut, error) {
 	if err != nil {
 		return SimulateOut{}, err
 	}
-	d := authz.Decide(authz.Check{
-		Request:  authz.Request{Mode: mode, Verifier: authz.Thing, Token: tok, Keys: s.lookup, Aud: s.aud, Now: s.now()},
-		Thing:    th.ID,
-		Zones:    th.Zones,
-		Table:    th.Effective,
-		Revoked:  &revoked,
-		Function: authz.Function{Kind: kind, Name: name, Op: authz.Op(op)},
-	})
+	decide := func(tok string) authz.Decision {
+		return authz.Decide(authz.Check{
+			Request:  authz.Request{Mode: mode, Verifier: authz.Thing, Token: tok, Keys: s.lookup, Aud: s.aud, Now: s.now()},
+			Thing:    th.ID,
+			Zones:    th.Zones,
+			Table:    th.Effective,
+			Revoked:  &revoked,
+			Function: authz.Function{Kind: kind, Name: name, Op: authz.Op(op)},
+		})
+	}
+	d := decide(tok)
 	out := SimulateOut{Allow: d.Allow, Step: d.Step, Reason: d.Reason}
+	// Allowed with grants: which one? Denied without them, the first
+	// that alone allows it.
+	if c := d.Claims; d.Allow && len(c.Grants) > 0 {
+		with := func(grants []string) authz.Decision {
+			c.Grants = grants
+			t, _ := auth.Sign(s.key, s.kid, c)
+			return decide(t)
+		}
+		if without := with(nil); !without.Allow {
+			out.WithoutStep = without.Step
+			for _, g := range d.Claims.Grants {
+				if with([]string{g}).Allow {
+					out.Grant = g
+					break
+				}
+			}
+		}
+	}
 	if d.Claims.Lvl != nil {
 		out.Level = *d.Claims.Lvl
 	} else if c, _, err := auth.Parse(tok, s.lookup); err == nil && c.Lvl != nil {
