@@ -34,6 +34,15 @@ func (s *Service) ChannelHandler() http.Handler {
 		tok, version, err := s.TableDoc(r.PathValue("id"))
 		signedDoc(w, r, tok, version, err)
 	})
+	mux.HandleFunc("GET /v1/heartbeat", func(w http.ResponseWriter, r *http.Request) {
+		tok, err := s.HeartbeatDoc(r.URL.Query().Get("nonce"), r.URL.Query()["thing"])
+		if err != nil {
+			reply(w, nil, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/jwt")
+		w.Write([]byte(tok))
+	})
 	mux.HandleFunc("GET /v1/revocation", func(w http.ResponseWriter, r *http.Request) {
 		tok, err := s.RevocationDoc()
 		var d auth.Doc

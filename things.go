@@ -528,6 +528,40 @@ func (s *Service) TableDoc(id string) (string, int64, error) {
 	return tok, d.Version, err
 }
 
+// HeartbeatDoc is the signed time (§4.3) for a Thing's nonce, with the
+// versions auth holds for it: the tables of the Things it asks for (at most
+// maxBeatThings, 0 when not adopted) and the revocation list (§4.4).
+func (s *Service) HeartbeatDoc(nonce string, things []string) (string, error) {
+	if nonce == "" || len(nonce) > 64 || len(things) > maxBeatThings {
+		return "", ErrInvalid
+	}
+	now := s.now()
+	v := &auth.Versions{Tables: map[string]int64{}}
+	s.store.db.QueryRow(`SELECT value FROM state WHERE key = 'revocations'`).Scan(&v.Revocation)
+	v.Revocation = max(v.Revocation, 1) // as RevocationDoc
+	for _, id := range things {
+		var version int64
+		var adopted bool
+		s.store.db.QueryRow(`SELECT version, adopted FROM things WHERE id = ?`, id).Scan(&version, &adopted)
+		if adopted {
+			version = max(version, 1) // as TableDoc
+		} else {
+			version = 0
+		}
+		v.Tables[id] = version
+	}
+	tok, err := auth.SignDoc(s.key, s.kid, auth.Doc{Iss: "auth", Aud: s.aud, Doc: auth.DocHeartbeat, Thing: "*",
+		Version: now.UnixMilli(), Issued: now.Unix(), Nonce: nonce, Versions: v})
+	if err == nil && len(tok) > auth.MaxDocSize {
+		return "", Invalid("heartbeat over 4000 bytes: fewer Things per request")
+	}
+	return tok, err
+}
+
+// maxBeatThings bounds the tables a heartbeat carries: the document stays
+// under 4000 bytes.
+const maxBeatThings = 16
+
 // --- States of the house (§2.5) ---
 
 // knownState: the states are the contexts offered to people.

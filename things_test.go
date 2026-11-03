@@ -115,3 +115,24 @@ func TestThingTables(t *testing.T) {
 		assert.NotNil(t, th["types"], th["id"])
 	}
 }
+
+// Step 5a: the signed time for a Thing's nonce, with the versions auth holds.
+func TestHeartbeat(t *testing.T) {
+	h := newHouse(t)
+	_, err := h.svc.HeartbeatDoc("", nil)
+	assert.ErrorIs(t, err, ErrInvalid, "a nonce is required")
+	_, err = h.svc.HeartbeatDoc("n", make([]string, maxBeatThings+1))
+	assert.ErrorIs(t, err, ErrInvalid)
+	require.NoError(t, h.svc.ReceiveTD(mustTD(t, garageTD), ""))
+	require.NoError(t, h.svc.ReceiveTD(TDIn{ID: "urn:eria:salon:1", Title: "Salon"}, ""))
+	require.NoError(t, h.svc.AdoptThing("urn:eria:garage:1"))
+	tok, err := h.svc.HeartbeatDoc("n1", []string{"urn:eria:garage:1", "urn:eria:salon:1", "urn:eria:nowhere"})
+	require.NoError(t, err)
+	d, err := auth.ParseDoc(tok, h.svc.lookup, "eria-maison", auth.DocHeartbeat, "urn:eria:garage:1")
+	require.NoError(t, err)
+	assert.Equal(t, "n1", d.Nonce)
+	assert.Equal(t, h.now.UnixMilli(), d.Version)
+	_, table, _ := h.svc.TableDoc("urn:eria:garage:1")
+	assert.Equal(t, map[string]int64{"urn:eria:garage:1": table, "urn:eria:salon:1": 0, "urn:eria:nowhere": 0}, d.Versions.Tables)
+	assert.Positive(t, d.Versions.Revocation)
+}
