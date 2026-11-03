@@ -21,6 +21,8 @@ import (
 const (
 	domainRelayToken = "eria-relay-token-v1"
 	serviceTokenTTL  = 15 * time.Minute
+	// A service granted a confirmable command gets 5 min tokens (§2.7 step 8).
+	confirmableTokenTTL = 5 * time.Minute
 )
 
 // RelayChallenge issues a challenge for the key of the relay carrying r.

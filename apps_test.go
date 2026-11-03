@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -180,4 +181,59 @@ func TestSignedTDAndStates(t *testing.T) {
 	assert.Equal(t, 403, h.call("PUT", "/v1/states", "", signed(contexts, auth.StatesPrefix, auth.States{Version: 1}), nil), "replayed")
 	assert.Equal(t, 200, h.call("PUT", "/v1/states", "", signed(contexts, auth.StatesPrefix, auth.States{Version: 2}), nil))
 	assert.Empty(t, h.svc.activeStates())
+}
+
+// Step 4a: the grants the master sends with the key go in the service token;
+// a grant on a confirmable command shortens it to 5 min; a grant removed
+// makes the app's tokens fall.
+func TestAppGrants(t *testing.T) {
+	h := newHouse(t)
+	h.bootstrapAdmin()
+	deployPub, deployPriv, _ := ed25519.GenerateKey(rand.Reader)
+	deploy, _ := auth.ParsePublicKey(auth.Ed25519, deployPub)
+	h.svc.deploy = []auth.PublicKey{deploy}
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	key, _ := auth.ParsePublicKey(auth.Ed25519, pub)
+	version := int64(0)
+	register := func(grants ...string) error {
+		version++
+		signed, err := auth.SignDocument(deployPriv, auth.AppKeyPrefix, auth.AppKey{App: "manager-pool", Node: "rdc",
+			Pubkey: base64.RawURLEncoding.EncodeToString(pub), Version: version, Grants: grants})
+		require.NoError(t, err)
+		return h.svc.RegisterAppKey(signed)
+	}
+	token := func() auth.Claims {
+		ch, err := h.svc.ServiceChallenge(key.KID())
+		require.NoError(t, err)
+		tok, err := h.svc.ServiceToken(key.KID(), ch, ed25519.Sign(priv, auth.ServiceProof(ch, h.svc.kid)))
+		require.NoError(t, err)
+		return h.claims(tok)
+	}
+
+	assert.ErrorIs(t, register("piscine:*"), ErrInvalid, "outside the grammar")
+	require.NoError(t, register("room:piscine:*"))
+	c := token()
+	assert.Equal(t, []string{"room:piscine:*"}, c.Grants)
+	assert.Equal(t, int64(15*60), c.Exp-c.Iat)
+
+	// A grant added: the tokens stay. On the garage's open (confirmable): 5 min.
+	require.NoError(t, h.svc.ReceiveTD(mustTD(t, garageTD), ""))
+	require.NoError(t, h.svc.AdoptThing("urn:eria:garage:1"))
+	h.now = h.now.Add(time.Second)
+	require.NoError(t, register("room:piscine:*", "thing:urn:eria:garage:1:invoke"))
+	assert.False(t, h.svc.revoked(c))
+	c = token()
+	assert.Equal(t, int64(5*60), c.Exp-c.Iat)
+	require.NoError(t, register("room:piscine:*", "thing:urn:eria:garage:1:read"))
+	assert.True(t, h.svc.revoked(c), "a grant removed")
+	h.now = h.now.Add(time.Second)
+	c = token()
+	assert.Equal(t, int64(15*60), c.Exp-c.Iat, "reading is never confirmed")
+	assert.False(t, h.svc.revoked(c), "the next token carries the new set")
+}
+
+func mustTD(t *testing.T, raw string) TDIn {
+	var td TDIn
+	require.NoError(t, json.Unmarshal([]byte(raw), &td))
+	return td
 }
