@@ -134,6 +134,14 @@ func OpenStore(path string) (*Store, error) {
 			last_token INTEGER NOT NULL DEFAULT 0
 		);
 		CREATE UNIQUE INDEX IF NOT EXISTS apps_kid ON apps (kid) WHERE kid != '';
+		-- Grants of the people (§2.6): expires 0 is never.
+		CREATE TABLE IF NOT EXISTS grants (
+			profile INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+			grant   TEXT NOT NULL,
+			expires INTEGER NOT NULL DEFAULT 0,
+			added   INTEGER NOT NULL,
+			PRIMARY KEY (profile, grant)
+		);
 		CREATE TABLE IF NOT EXISTS active_states (
 			state TEXT PRIMARY KEY
 		);

@@ -235,6 +235,9 @@ func (s *Service) issue(t Terminal, p *Profile, out bool, ttl time.Duration) (st
 			c.Sub = fmt.Sprintf("profil:%d", p.ID)
 			c.Exp = now.Add(tokenTTL).Unix()
 		}
+		if lvl > 0 && lvl < 9 {
+			c.Grants = s.personGrants(p.ID, t)
+		}
 	}
 	c.Lvl = &lvl
 	return auth.Sign(s.key, s.kid, c)

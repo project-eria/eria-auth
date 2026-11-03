@@ -207,6 +207,19 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/profiles/{id}", admin(func(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, s.DeleteProfile(pathID(r)))
 	}))
+	mux.HandleFunc("GET /v1/profiles/{id}/grants", admin(func(w http.ResponseWriter, r *http.Request) {
+		list, err := s.ProfileGrants(pathID(r))
+		reply(w, list, err)
+	}))
+	mux.HandleFunc("POST /v1/profiles/{id}/grants", admin(handle(func(r *http.Request, in struct {
+		Grant   string
+		Expires int64
+	}) (any, error) {
+		return s.AddGrant(pathID(r), in.Grant, in.Expires)
+	})))
+	mux.HandleFunc("DELETE /v1/profiles/{id}/grants/{grant}", admin(func(w http.ResponseWriter, r *http.Request) {
+		reply(w, nil, s.RemoveGrant(pathID(r), r.PathValue("grant")))
+	}))
 	mux.HandleFunc("GET /v1/terminals", admin(func(w http.ResponseWriter, r *http.Request) {
 		list, err := s.Terminals()
 		reply(w, list, err)

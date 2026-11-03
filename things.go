@@ -448,13 +448,14 @@ func (s *Service) SetZones(id string, zones []string) error {
 	if zones == nil {
 		zones = []string{}
 	}
-	res, err := s.store.db.Exec(`UPDATE things SET zones = ? WHERE id = ?`, jsonText(zones), id)
+	old, err := s.thing(id)
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
+	if _, err := s.store.db.Exec(`UPDATE things SET zones = ? WHERE id = ?`, jsonText(zones), id); err != nil {
+		return err
 	}
+	s.alertRooms(id, old.Zones, zones)
 	s.store.log("thing.zones", fmt.Sprintf("%s %v", id, zones))
 	s.bumpThing(id)
 	return nil
