@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -194,4 +196,60 @@ func TestJournalCopy(t *testing.T) {
 	require.NoError(t, jc.Sync())
 	assert.Contains(t, h.alert, "Journal divergent")
 	assert.Equal(t, "digest", h.last("journal.diverged").Reason)
+}
+
+// Step 5e-3: the master's and the relay's lines, signed, taken once, their
+// own types only.
+func TestJournalSources(t *testing.T) {
+	h := newHouse(t)
+	deployPub, deployPriv, _ := ed25519.GenerateKey(rand.Reader)
+	deploy, _ := auth.ParsePublicKey(auth.Ed25519, deployPub)
+	h.svc.deploy = []auth.PublicKey{deploy}
+	channel := httptest.NewServer(h.svc.ChannelHandler())
+	defer channel.Close()
+	post := func(b auth.JournalBatch, key ed25519.PrivateKey) int {
+		doc, _ := auth.SignDocument(key, auth.JournalPrefix, b)
+		body, _ := json.Marshal(doc)
+		resp, err := http.Post(channel.URL+"/v1/journal", "application/json", strings.NewReader(string(body)))
+		require.NoError(t, err)
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	order := auth.Line{At: h.now.Unix(), Type: "order.validated", Subject: "profil:1", Object: "deployApp"}
+	b := auth.JournalBatch{Seq: 10, Lines: []auth.Line{order, {At: h.now.Unix(), Type: "session.open"}}}
+	assert.Equal(t, 200, post(b, deployPriv))
+	assert.Equal(t, 200, post(b, deployPriv), "sent again: taken once")
+	got := h.last("order.validated")
+	assert.Equal(t, sourceMaster, got.Source)
+	assert.Equal(t, keepLong, got.Keep)
+	assert.Equal(t, "type", h.last("document.refused").Reason, "a type of another source")
+	lines, _ := h.svc.store.Journal(0)
+	n := 0
+	for _, e := range lines {
+		if e.Type == "order.validated" {
+			n++
+		}
+	}
+	assert.Equal(t, 1, n)
+
+	// Another key: refused, alerted; a late line keeps its own time in detail.
+	_, forger, _ := ed25519.GenerateKey(rand.Reader)
+	assert.Equal(t, 403, post(auth.JournalBatch{Seq: 11, Lines: []auth.Line{order}}, forger))
+	assert.Contains(t, h.alert, "Signature invalide : maitre")
+	late := order
+	late.At -= 600
+	assert.Equal(t, 200, post(auth.JournalBatch{Seq: 12, Lines: []auth.Line{late}}, deployPriv))
+	assert.Contains(t, h.last("order.validated").Detail, "(at ")
+	assert.Equal(t, h.now.Unix(), h.last("order.validated").At, "auth's time")
+
+	// The relay, by its TLS key: relay.* only.
+	relayPriv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	raw, _ := relayPriv.PublicKey.Bytes()
+	relay, _ := auth.ParsePublicKey(auth.P256, raw)
+	doc, _ := auth.SignDocumentP256(relayPriv, auth.JournalPrefix, auth.JournalBatch{Seq: 1,
+		Lines: []auth.Line{{At: h.now.Unix(), Type: "relay.denied", Object: "urn:garage"}, order}})
+	require.NoError(t, h.svc.ReceiveJournal(sourceRelay+"interieur", []auth.PublicKey{relay}, doc))
+	assert.Equal(t, "eria-ui-server-interieur", h.last("relay.denied").Source)
+	assert.Equal(t, keepShort, h.last("relay.denied").Keep)
+	assert.Equal(t, sourceMaster, h.last("order.validated").Source)
 }

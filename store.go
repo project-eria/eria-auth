@@ -146,6 +146,10 @@ func OpenStore(path string) (*Store, error) {
 		CREATE TABLE IF NOT EXISTS active_states (
 			state TEXT PRIMARY KEY
 		);
+		CREATE TABLE IF NOT EXISTS journal_sources (
+			source TEXT PRIMARY KEY,
+			seq    INTEGER NOT NULL
+		);
 		CREATE TABLE IF NOT EXISTS journal (
 			id     INTEGER PRIMARY KEY,
 			at     INTEGER NOT NULL,

@@ -339,6 +339,18 @@ func (s *Service) Handler() http.Handler {
 		tok, err := s.RelayToken(r, in.Challenge, in.Sig)
 		return map[string]string{"token": tok}, err
 	}))
+	// The relay's journal lines (§4.5), signed by its certificate key.
+	mux.HandleFunc("POST /v1/relay/journal", receiveBatch(func(r *http.Request, doc auth.Signed) error {
+		key, ok := relayPublicKey(r)
+		if !ok {
+			return ErrDenied
+		}
+		which := "interieur"
+		if isOut(r) {
+			which = "exterieur"
+		}
+		return s.ReceiveJournal(sourceRelay+which, []auth.PublicKey{key}, doc)
+	}))
 	// Requirements per Thing (§2.4, §2.5) and the simulator (F106).
 	mux.HandleFunc("GET /v1/things", admin(func(w http.ResponseWriter, r *http.Request) {
 		list, err := s.Things()
@@ -391,6 +403,19 @@ func (s *Service) Handler() http.Handler {
 
 // handle decodes a bounded, strict JSON body into In and replies with the
 // result.
+// receiveBatch decodes a signed batch of journal lines: larger than the
+// other requests (32 lines).
+func receiveBatch(f func(*http.Request, auth.Signed) error) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var doc auth.Signed
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&doc); err != nil {
+			reply(w, nil, ErrInvalid)
+			return
+		}
+		reply(w, nil, f(r, doc))
+	}
+}
+
 func handle[In any](f func(*http.Request, In) (any, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var in In

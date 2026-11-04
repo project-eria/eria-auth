@@ -2,8 +2,11 @@ package main
 
 import (
 	"cmp"
+	"fmt"
 	"strings"
 	"time"
+
+	"github.com/project-eria/go-wot/auth"
 )
 
 // Journal (AUTH-DESIGN §4.5, step 5e-1): one schema for every source, so that
@@ -33,7 +36,7 @@ const (
 )
 
 // shortKept are the comfort types; every other one is administration.
-var shortKept = []string{"session.", "token.service", "proof.", "revocation.ack", "auth.start",
+var shortKept = []string{"session.", "relay.", "token.service", "proof.", "revocation.ack", "auth.start",
 	"thing.alert", "thing.td", "enroll.request", "enroll.cancelled", "document."}
 
 func keepOf(typ string) int {
@@ -135,4 +138,51 @@ func (s *Service) Started() {
 		s.notify("Restauration d'auth")
 	}
 	s.store.record(Entry{Type: "auth.start"})
+}
+
+// Sources that hand auth their lines (step 5e-3); each writes its own types
+// only: order.* for the master, relay.* for eria-ui-server.
+const (
+	sourceMaster = "maitre"
+	sourceRelay  = "eria-ui-server-" // + interieur or exterieur
+)
+
+// ReceiveJournal takes a batch of lines signed by one of keys for source,
+// once: a batch whose seq isn't above the last taken is skipped. The line's
+// time is auth's (the copy on the master goes in auth's order), the
+// source's kept in the detail when they differ by more than a minute.
+func (s *Service) ReceiveJournal(source string, keys []auth.PublicKey, doc auth.Signed) error {
+	var b auth.JournalBatch
+	if err := doc.Open(auth.JournalPrefix, keys, &b); err != nil {
+		s.store.record(Entry{Type: "document.refused", Subject: source, Result: "denied", Reason: "signature"})
+		s.alertOnce("signature:"+source, "Signature invalide : "+source)
+		return ErrDenied
+	}
+	prefix := "relay."
+	if source == sourceMaster {
+		prefix = "order."
+	}
+	var last int64
+	s.store.db.QueryRow(`SELECT seq FROM journal_sources WHERE source = ?`, source).Scan(&last)
+	if b.Seq <= last {
+		return nil // sent again, its answer lost
+	}
+	now := s.now().Unix()
+	for _, l := range b.Lines {
+		if !strings.HasPrefix(l.Type, prefix) {
+			s.store.record(Entry{Type: "document.refused", Subject: source, Result: "denied", Reason: "type"})
+			continue
+		}
+		if l.Result != "denied" {
+			l.Result = "ok"
+		}
+		if d := l.At - now; d > 60 || d < -60 {
+			l.Detail = strings.TrimSpace(fmt.Sprintf("%s (at %d)", l.Detail, l.At))
+		}
+		s.store.record(Entry{Source: source, Type: l.Type, Subject: l.Subject, Object: l.Object,
+			Result: l.Result, Reason: l.Reason, Jti: l.Jti, Detail: l.Detail})
+	}
+	_, err := s.store.db.Exec(`INSERT INTO journal_sources (source, seq) VALUES (?, ?)
+		ON CONFLICT (source) DO UPDATE SET seq = excluded.seq`, source, b.Seq)
+	return err
 }
