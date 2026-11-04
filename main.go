@@ -40,7 +40,8 @@ type AppConfig struct {
 	Ntfy       string `yaml:"ntfy"`                                 // ntfy topic URL for the alerts
 	StatesApp  string `yaml:"statesApp" default:"manager-contexts"` // the app that publishes the house states, its name in the deployment
 	// Backups (§4.2): the master's action storeAuthBackup, and the age public
-	// key of its backup key (eria-manager auth-secrets).
+	// key of its backup key (eria-manager auth-secrets). The journal's copy
+	// goes to appendAuthJournal next to it (§4.5).
 	BackupURL       string `yaml:"backupURL" required:"true"`
 	BackupRecipient string `yaml:"backupRecipient" required:"true"`
 	// First values only, copied at the first start, then edited by the admin.
@@ -108,6 +109,11 @@ func main() {
 	go backup.Run()
 	go svc.WatchThings(nil)
 	go store.PurgeJournal(nil)
+	journalCopy, err := NewJournalCopy(svc, config.BackupURL, master)
+	if err != nil {
+		zlog.Fatal().Err(err).Msg("[main] Bad backupURL")
+	}
+	go journalCopy.Run(nil)
 	svc.Started()
 	backup.Changed() // a first backup at each start
 	zlog.Info().Str("fingerprint", svc.kid).Msg("[main] auth key (compare with eria-manager auth-keyset)")

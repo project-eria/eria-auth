@@ -3,7 +3,13 @@ package main
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -114,4 +120,78 @@ func TestBadDocuments(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, acks, "a revocation version journaled once per app")
+}
+
+// Step 5e-2: each line copied once to the master, yesterday compared.
+func TestJournalCopy(t *testing.T) {
+	h := newHouse(t)
+	var kept []string // the master's lines, as sent
+	lost := false     // the master keeps the lines, its answer is lost
+	pub := h.svc.key.Public().(ed25519.PublicKey)
+	master := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/appendAuthJournal", r.URL.Path)
+		var in struct{ Lines, Sig, Day string }
+		json.NewDecoder(r.Body).Decode(&in)
+		sum := sha256.Sum256([]byte(in.Lines))
+		sig, _ := base64.StdEncoding.DecodeString(in.Sig)
+		require.True(t, ed25519.Verify(pub, append([]byte(JournalPrefix), sum[:]...), sig))
+		var last Entry
+		if len(kept) > 0 {
+			json.Unmarshal([]byte(kept[len(kept)-1]), &last)
+		}
+		for line := range strings.Lines(in.Lines) {
+			var e Entry
+			json.Unmarshal([]byte(line), &e)
+			if e.At > last.At || e.At == last.At && e.ID > last.ID {
+				kept, last = append(kept, line), e
+			}
+		}
+		if lost {
+			lost = false
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		digests := map[string]string{}
+		for _, keep := range []int{keepShort, keepLong} {
+			var file string
+			for _, line := range kept {
+				var e Entry
+				json.Unmarshal([]byte(line), &e)
+				if time.Unix(e.At, 0).UTC().Format(time.DateOnly) == in.Day && e.Keep == keep {
+					file += line
+				}
+			}
+			if file != "" {
+				d := sha256.Sum256([]byte(file))
+				digests[strconv.Itoa(keep)] = hex.EncodeToString(d[:])
+			}
+		}
+		json.NewEncoder(w).Encode(map[string]any{"at": last.At, "id": last.ID, "digests": digests})
+	}))
+	defer master.Close()
+	jc, err := NewJournalCopy(h.svc, master.URL+"/storeAuthBackup", master.Client())
+	require.NoError(t, err)
+
+	h.svc.Started()
+	require.NoError(t, jc.Sync())
+	require.Len(t, kept, 1)
+	// A batch sent again after a lost answer: no line twice.
+	h.svc.store.record(Entry{Type: "grant.add"})
+	lost = true
+	assert.Error(t, jc.Sync())
+	jc.known = false
+	h.svc.store.record(Entry{Type: "grant.remove"})
+	require.NoError(t, jc.Sync())
+	lines, _ := h.svc.store.Journal(0)
+	assert.Equal(t, journalText(lines), strings.Join(kept, ""))
+
+	// The next day, yesterday is compared: the same, then altered on the master.
+	h.now = h.now.Add(24 * time.Hour)
+	require.NoError(t, jc.Sync())
+	assert.Empty(t, h.alert)
+	kept[0] = strings.Replace(kept[0], "auth.start", "auth.stop", 1)
+	jc.compared = "" // as after a restart
+	require.NoError(t, jc.Sync())
+	assert.Contains(t, h.alert, "Journal divergent")
+	assert.Equal(t, "digest", h.last("journal.diverged").Reason)
 }

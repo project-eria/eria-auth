@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"strings"
 	"time"
 )
@@ -11,6 +12,7 @@ import (
 
 // Entry is a journal line.
 type Entry struct {
+	ID      int64  `json:"id"`                // order in auth's database
 	At      int64  `json:"at"`                // unix seconds, auth's clock
 	Source  string `json:"source"`            // auth; the others from step 5e-3
 	Type    string `json:"type"`              // session.open, token.service…
@@ -61,6 +63,10 @@ func (s *Store) record(e Entry) {
 	s.db.Exec(`INSERT INTO journal (at, source, event, subject, object, result, reason, jti, detail, keep)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.At, e.Source, e.Type, e.Subject, e.Object, e.Result, e.Reason, e.Jti, e.Detail, e.Keep)
+	select {
+	case s.written <- struct{}{}:
+	default:
+	}
 }
 
 // log adds a journal line after a change of the state, and asks for a
@@ -72,8 +78,14 @@ func (s *Store) log(event, detail string) {
 
 // Journal returns the lines from since (unix seconds), oldest first.
 func (s *Store) Journal(since int64) ([]Entry, error) {
-	rows, err := s.db.Query(`SELECT at, source, event, subject, object, result, reason, jti, detail, keep
-		FROM journal WHERE at >= ? ORDER BY id`, since)
+	return s.journalWhere(`at >= ?`, 0, since)
+}
+
+// journalWhere returns at most limit lines (0: all) matching where, in the
+// order of the copy: time, then id.
+func (s *Store) journalWhere(where string, limit int, args ...any) ([]Entry, error) {
+	rows, err := s.db.Query(`SELECT id, at, source, event, subject, object, result, reason, jti, detail, keep
+		FROM journal WHERE `+where+` ORDER BY at, id LIMIT ?`, append(args, cmp.Or(limit, -1))...)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +93,7 @@ func (s *Store) Journal(since int64) ([]Entry, error) {
 	var out []Entry
 	for rows.Next() {
 		var e Entry
-		if err := rows.Scan(&e.At, &e.Source, &e.Type, &e.Subject, &e.Object, &e.Result, &e.Reason, &e.Jti, &e.Detail, &e.Keep); err != nil {
+		if err := rows.Scan(&e.ID, &e.At, &e.Source, &e.Type, &e.Subject, &e.Object, &e.Result, &e.Reason, &e.Jti, &e.Detail, &e.Keep); err != nil {
 			return nil, err
 		}
 		out = append(out, e)
@@ -89,11 +101,11 @@ func (s *Store) Journal(since int64) ([]Entry, error) {
 	return out, rows.Err()
 }
 
-// purge drops the lines past their class, by whole days: a line goes on
-// the day after its last kept day, with every line of its day.
+// purge drops the lines past their class, by whole UTC days (the master's
+// copy alike): a line goes on the day after its last kept day, with every
+// line of its day.
 func (s *Store) purge() {
-	now := s.now()
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
+	today := s.now().Unix() / 86400 * 86400
 	s.db.Exec(`DELETE FROM journal WHERE at < ? - keep * 86400`, today)
 }
 

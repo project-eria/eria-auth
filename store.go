@@ -14,6 +14,7 @@ type Store struct {
 	db      *sql.DB
 	now     func() time.Time // overridable by tests
 	changed func()           // called after each change of the state (backup)
+	written chan struct{}    // a journal line written: copy it to the master
 }
 
 func OpenStore(path string) (*Store, error) {
@@ -165,7 +166,7 @@ func OpenStore(path string) (*Store, error) {
 		db.Exec(`ALTER TABLE journal ADD COLUMN ` + col + ` TEXT NOT NULL DEFAULT ''`)
 	}
 	db.Exec(`ALTER TABLE journal ADD COLUMN keep INTEGER NOT NULL DEFAULT 365`)
-	st := &Store{db: db, now: time.Now, changed: func() {}}
+	st := &Store{db: db, now: time.Now, changed: func() {}, written: make(chan struct{}, 1)}
 	if err := st.migrateConfig(); err != nil {
 		return nil, err
 	}
