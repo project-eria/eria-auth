@@ -129,6 +129,7 @@ func (s *Service) ReceiveSignedTD(body []byte) error {
 			return ErrDenied
 		}
 		if body, err = signed.Verify(auth.TDPrefix, []auth.PublicKey{pub}); err != nil {
+			s.badSignature(id, "td")
 			return ErrDenied
 		}
 		app = id
@@ -605,9 +606,9 @@ func (s *Service) ReceiveStates(body []byte) error {
 		}
 		return s.SetActiveStates(states)
 	}
-	var name string
+	var id, name string
 	var raw []byte
-	if s.store.db.QueryRow(`SELECT name, raw FROM apps WHERE kid = ?`, signed.Kid).Scan(&name, &raw) != nil || name != s.statesApp {
+	if s.store.db.QueryRow(`SELECT id, name, raw FROM apps WHERE kid = ?`, signed.Kid).Scan(&id, &name, &raw) != nil || name != s.statesApp {
 		return ErrDenied
 	}
 	pub, err := auth.ParsePublicKey(auth.Ed25519, raw)
@@ -616,6 +617,7 @@ func (s *Service) ReceiveStates(body []byte) error {
 	}
 	var st auth.States
 	if signed.Open(auth.StatesPrefix, []auth.PublicKey{pub}, &st) != nil {
+		s.badSignature(id, "states")
 		return ErrDenied
 	}
 	var last int64

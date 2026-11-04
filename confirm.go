@@ -38,11 +38,12 @@ func (s *Service) Confirm(p Proof, act string) (string, error) {
 		return "", ErrDenied
 	}
 	now := s.now()
-	tok, err := auth.Sign(s.key, s.kid, auth.Claims{Iss: "auth", Aud: s.aud, Kind: auth.KindConfirm,
+	c := auth.Claims{Iss: "auth", Aud: s.aud, Kind: auth.KindConfirm,
 		Sub: fmt.Sprintf("profil:%d", owner.ID), Term: t.ID, Act: act,
-		Iat: now.Unix(), Exp: now.Add(confirmTTL).Unix(), Jti: randomID()})
+		Iat: now.Unix(), Exp: now.Add(confirmTTL).Unix(), Jti: randomID()}
+	tok, err := auth.Sign(s.key, s.kid, c)
 	if err == nil {
-		s.store.log("confirm", t.ID+" "+act)
+		s.store.record(Entry{Type: "token.confirm", Subject: c.Sub, Object: "term:" + t.ID, Jti: c.Jti, Detail: "act " + act})
 	}
 	return tok, err
 }

@@ -44,6 +44,7 @@ func (s *Service) ReceiveAck(body []byte) error {
 	}
 	payload, err := signed.Verify(auth.AckPrefix, []auth.PublicKey{pub})
 	if err != nil {
+		s.badSignature(id, "ack")
 		return ErrDenied
 	}
 	var a auth.Ack
@@ -51,12 +52,19 @@ func (s *Service) ReceiveAck(body []byte) error {
 		return ErrInvalid
 	}
 	now := s.now()
-	if beat := time.UnixMilli(a.Beat); beat.After(now.Add(time.Minute)) || now.Sub(beat) > ackFresh {
+	if beat := time.UnixMilli(a.Beat); beat.After(now.Add(time.Minute)) {
+		s.store.record(Entry{Type: "document.refused", Subject: auth.AppSubject + id, Object: "ack", Result: "denied", Reason: "time"})
+		s.alertOnce("time:"+id, "Horodatage invraisemblable : "+s.appName(id))
+		return ErrDenied
+	} else if now.Sub(beat) > ackFresh {
 		return ErrDenied // an old acknowledgement replayed proves nothing
 	}
 	behind := s.behind(a)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if prev := s.acks[id]; prev == nil || prev.ack.Revocation != a.Revocation {
+		s.store.record(Entry{Type: "revocation.ack", Subject: auth.AppSubject + id, Detail: fmt.Sprintf("version %d", a.Revocation)})
+	}
 	seen := &ackSeen{at: now, ack: a}
 	if prev := s.acks[id]; prev != nil && behind {
 		seen.lagging = prev.lagging
@@ -143,7 +151,35 @@ func (s *Service) checkThings() {
 	s.burst = silent >= burstCount
 	s.mu.Unlock()
 	for _, a := range alerts {
-		s.store.log("thing.alert", a)
+		s.store.record(Entry{Type: "thing.alert", Detail: a})
 		s.notify(a)
 	}
+}
+
+// alertOnce sends title at most once a day per key.
+func (s *Service) alertOnce(key, title string) {
+	s.mu.Lock()
+	now := s.now()
+	send := now.Sub(s.alerted[key]) >= alertEvery
+	if send {
+		s.alerted[key] = now
+	}
+	s.mu.Unlock()
+	if send {
+		s.store.record(Entry{Type: "alert", Detail: title})
+		s.notify(title)
+	}
+}
+
+// badSignature journals a document of app id whose signature fails, and
+// alerts (§4.5): the app's key holder sent it, or someone forges it.
+func (s *Service) badSignature(id, doc string) {
+	s.store.record(Entry{Type: "document.refused", Subject: auth.AppSubject + id, Object: doc, Result: "denied", Reason: "signature"})
+	s.alertOnce("signature:"+id, "Signature invalide : "+s.appName(id))
+}
+
+func (s *Service) appName(id string) string {
+	name := id
+	s.store.db.QueryRow(`SELECT name FROM apps WHERE id = ?`, id).Scan(&name)
+	return name
 }

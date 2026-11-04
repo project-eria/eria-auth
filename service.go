@@ -214,18 +214,26 @@ func (s *Service) TerminalToken(p Proof, out bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return s.issue(t, nil, out, terminalTokenTTL)
+	tok, _, err := s.issue(t, nil, out, terminalTokenTTL, "")
+	return tok, err
 }
 
 // --- Tokens ---
 
 // issue signs a user token for terminal t and profile p (nil: signed out).
 // The level is max(profile level, terminal floor); 9 gives a terminal token.
-func (s *Service) issue(t Terminal, p *Profile, out bool, ttl time.Duration) (string, error) {
+// The token of session sid has the jti sid.<rank> (§4.5): a refusal at a
+// Thing leads back to the session.
+func (s *Service) issue(t Terminal, p *Profile, out bool, ttl time.Duration, sid string) (string, auth.Claims, error) {
 	now := s.now()
 	lvl := 9
 	c := auth.Claims{Iss: "auth", Aud: s.aud, Kind: auth.KindUser, Term: t.ID, Out: &out,
 		RoomOnly: t.RoomOnly, Iat: now.Unix(), Exp: now.Add(ttl).Unix(), Jti: randomID()}
+	if sid != "" {
+		var rank int
+		s.store.db.QueryRow(`UPDATE sessions SET tokens = tokens + 1 WHERE id = ? RETURNING tokens`, sid).Scan(&rank)
+		c.Jti = fmt.Sprintf("%s.%d", sid, rank)
+	}
 	if t.Type == "fixed" {
 		c.Zone = t.Zone
 	}
@@ -243,7 +251,8 @@ func (s *Service) issue(t Terminal, p *Profile, out bool, ttl time.Duration) (st
 		}
 	}
 	c.Lvl = &lvl
-	return auth.Sign(s.key, s.kid, c)
+	tok, err := auth.Sign(s.key, s.kid, c)
+	return tok, c, err
 }
 
 // lookup verifies the tokens auth itself issued (admin API, blocking).
@@ -291,6 +300,7 @@ func (s *Service) revoke(subject string) { s.revokeBefore(subject, s.now().Unix(
 func (s *Service) revokeOlder(subject string) { s.revokeBefore(subject, s.now().Unix()) }
 
 func (s *Service) revokeBefore(subject string, before int64) {
+	s.store.record(Entry{Type: "revocation", Object: subject, Detail: fmt.Sprintf("before %d", before)})
 	s.store.db.Exec(`INSERT INTO revocations (subject, before) VALUES (?, ?)
 		ON CONFLICT (subject) DO UPDATE SET before = excluded.before`, subject, before)
 	s.store.db.Exec(`INSERT INTO state (key, value) VALUES ('revocations', ?)

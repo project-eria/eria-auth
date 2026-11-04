@@ -145,7 +145,9 @@ func (s *Service) failTerminal(t Terminal) error {
 	now := s.now()
 	s.store.db.Exec(`UPDATE terminals SET pin_failures = ?, pin_until = ?, pin_last = ? WHERE id = ?`,
 		failures, now.Add(wait).Unix(), now.Unix(), t.ID)
-	s.store.log("secret.fail", fmt.Sprintf("%s failure %d", t.ID, failures))
+	s.store.record(Entry{Type: "secret.fail", Object: "term:" + t.ID, Result: "denied", Reason: "pin",
+		Detail: fmt.Sprintf("failure %d", failures)})
+	s.store.changed()
 	if failures == 5 {
 		s.notify("5 échecs de PIN : " + t.Name)
 	}
@@ -219,9 +221,31 @@ func (s *Service) startSession(t Terminal, p Profile, admin bool, out bool) (Ses
 		VALUES (?, ?, ?, ?, ?, ?)`, id, t.ID, p.ID, admin, now, now); err != nil {
 		return Session{}, err
 	}
-	s.store.log("session.open", fmt.Sprintf("%s profile %d admin %t", t.ID, p.ID, admin))
-	tok, err := s.issue(t, &p, out, tokenTTL)
-	return Session{id, tok}, err
+	tok, c, err := s.issue(t, &p, out, tokenTTL, id)
+	if err != nil {
+		return Session{}, err
+	}
+	keep := keepShort // a session that may confirm, or of level 0 or 1, a year (§4.5)
+	if *c.Lvl <= 1 || s.grantsConfirmable(c.Grants) {
+		keep = keepLong
+	}
+	s.store.record(Entry{Type: "session.open", Subject: fmt.Sprintf("profil:%d", p.ID), Object: "term:" + t.ID,
+		Jti: c.Jti, Keep: keep, Detail: fmt.Sprintf("session %s zone %s out %t lvl %d admin %t grants %s",
+			id, c.Zone, out, *c.Lvl, admin, strings.Join(c.Grants, " "))})
+	s.store.changed()
+	return Session{id, tok}, nil
+}
+
+// closeSession ends a session, journaled with why: end (signed out), idle,
+// max (2 h), out (an admin session through the outer relay).
+func (s *Service) closeSession(sessionID, reason string) {
+	var term string
+	var profile int64
+	if s.store.db.QueryRow(`DELETE FROM sessions WHERE id = ? RETURNING terminal, profile`, sessionID).Scan(&term, &profile) != nil {
+		return
+	}
+	s.store.record(Entry{Type: "session.close", Subject: fmt.Sprintf("profil:%d", profile), Object: "term:" + term,
+		Reason: reason, Detail: "session " + sessionID})
 }
 
 // Renew issues a fresh token for an open session, on an identity proof
@@ -243,8 +267,8 @@ func (s *Service) Renew(sessionID string, p Proof, gesture bool, out bool) (Sess
 		idle = adminInactivity
 	}
 	now := s.now()
-	if now.Sub(time.Unix(last, 0)) > idle || now.Sub(time.Unix(opened, 0)) > sessionMax || (admin && out) {
-		s.store.db.Exec(`DELETE FROM sessions WHERE id = ?`, sessionID)
+	if reason := closing(now, last, opened, idle, admin && out); reason != "" {
+		s.closeSession(sessionID, reason)
 		return Session{}, ErrDenied
 	}
 	if gesture {
@@ -254,13 +278,24 @@ func (s *Service) Renew(sessionID string, p Proof, gesture bool, out bool) (Sess
 	if err != nil {
 		return Session{}, ErrDenied
 	}
-	tok, err := s.issue(t, &prof, out, tokenTTL)
+	tok, _, err := s.issue(t, &prof, out, tokenTTL, sessionID)
 	return Session{sessionID, tok}, err
 }
 
-func (s *Service) EndSession(sessionID string) {
-	s.store.db.Exec(`DELETE FROM sessions WHERE id = ?`, sessionID)
+// closing tells why a session must close now, "" while it lasts.
+func closing(now time.Time, gesture, opened int64, idle time.Duration, outAdmin bool) string {
+	switch {
+	case outAdmin:
+		return "out"
+	case now.Sub(time.Unix(opened, 0)) > sessionMax:
+		return "max"
+	case now.Sub(time.Unix(gesture, 0)) > idle:
+		return "idle"
+	}
+	return ""
 }
+
+func (s *Service) EndSession(sessionID string) { s.closeSession(sessionID, "end") }
 
 // --- Admin session (§3.5): passphrase, then a validator's signature ---
 

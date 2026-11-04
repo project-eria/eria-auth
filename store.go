@@ -157,19 +157,17 @@ func OpenStore(path string) (*Store, error) {
 	// Databases made before the column: the error once it exists is expected.
 	db.Exec(`ALTER TABLE terminals ADD COLUMN device TEXT NOT NULL DEFAULT ''`)
 	db.Exec(`ALTER TABLE terminals ADD COLUMN validator INTEGER NOT NULL DEFAULT 0`)
-	db.Exec(`ALTER TABLE keys ADD COLUMN since INTEGER NOT NULL DEFAULT 0`)  // a pending bio key: when it came
-	db.Exec(`ALTER TABLE things ADD COLUMN app TEXT NOT NULL DEFAULT ''`)    // id of the app that signs its TD (step 3d)
-	db.Exec(`ALTER TABLE apps ADD COLUMN grants TEXT NOT NULL DEFAULT '[]'`) // accepted by the admin (step 4)
+	db.Exec(`ALTER TABLE keys ADD COLUMN since INTEGER NOT NULL DEFAULT 0`)                  // a pending bio key: when it came
+	db.Exec(`ALTER TABLE things ADD COLUMN app TEXT NOT NULL DEFAULT ''`)                    // id of the app that signs its TD (step 3d)
+	db.Exec(`ALTER TABLE apps ADD COLUMN grants TEXT NOT NULL DEFAULT '[]'`)                 // accepted by the admin (step 4)
+	db.Exec(`ALTER TABLE sessions ADD COLUMN tokens INTEGER NOT NULL DEFAULT 0`)             // jti = session ‖ counter (§4.5)
+	for _, col := range []string{"source", "subject", "object", "result", "reason", "jti"} { // one schema (step 5e)
+		db.Exec(`ALTER TABLE journal ADD COLUMN ` + col + ` TEXT NOT NULL DEFAULT ''`)
+	}
+	db.Exec(`ALTER TABLE journal ADD COLUMN keep INTEGER NOT NULL DEFAULT 365`)
 	st := &Store{db: db, now: time.Now, changed: func() {}}
 	if err := st.migrateConfig(); err != nil {
 		return nil, err
 	}
 	return st, nil
-}
-
-// log adds a journal line after a change of the state, and asks for a
-// backup. Never a PIN, a passphrase or a code.
-func (s *Store) log(event, detail string) {
-	s.db.Exec(`INSERT INTO journal (at, event, detail) VALUES (?, ?, ?)`, s.now().Unix(), event, detail)
-	s.changed()
 }

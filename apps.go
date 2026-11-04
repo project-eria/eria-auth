@@ -39,6 +39,8 @@ type AppOut struct {
 func (s *Service) RegisterAppKey(signed auth.Signed) error {
 	var k auth.AppKey
 	if err := signed.Open(auth.AppKeyPrefix, s.deploy, &k); err != nil || k.App == "" {
+		s.store.record(Entry{Type: "document.refused", Object: "app-key", Result: "denied", Reason: "signature"})
+		s.alertOnce("signature:master", "Signature invalide : maître")
 		return ErrDenied
 	}
 	if auth.ValidGrants(k.Grants) != nil {
@@ -139,7 +141,12 @@ func (s *Service) ServiceChallenge(kid string) (string, error) {
 // master's token: no grants, it only reads the inventory.
 func (s *Service) ServiceToken(kid, challenge string, sig []byte, thing string) (string, error) {
 	id, pub, err := s.appKey(kid)
-	if err != nil || !s.challenges.Redeem(challenge, pub, auth.ServiceProof(challenge, s.kid), sig) {
+	if err != nil {
+		s.store.record(Entry{Type: "proof.service", Subject: "kid:" + kid, Result: "denied", Reason: "key"})
+		return "", ErrDenied
+	}
+	if !s.challenges.Redeem(challenge, pub, auth.ServiceProof(challenge, s.kid), sig) {
+		s.store.record(Entry{Type: "proof.service", Subject: auth.AppSubject + id, Result: "denied", Reason: "proof"})
 		return "", ErrDenied
 	}
 	if thing != "" {
@@ -154,12 +161,16 @@ func (s *Service) ServiceToken(kid, challenge string, sig []byte, thing string) 
 	}
 	now := s.now()
 	s.store.db.Exec(`UPDATE apps SET last_token = ? WHERE id = ?`, now.Unix(), id)
-	return s.appToken(id, thing, now)
+	tok, c, err := s.appToken(id, thing, now)
+	if err == nil {
+		s.store.record(Entry{Type: "token.service", Subject: c.Sub, Object: thing, Jti: c.Jti, Detail: strings.Join(c.Grants, " ")})
+	}
+	return tok, err
 }
 
 // appToken is the token of app id for thing, carrying only the app's
 // grants on it: smaller, and worthless at any other Thing.
-func (s *Service) appToken(id, thing string, now time.Time) (string, error) {
+func (s *Service) appToken(id, thing string, now time.Time) (string, auth.Claims, error) {
 	var raw string
 	s.store.db.QueryRow(`SELECT grants FROM apps WHERE id = ?`, id).Scan(&raw)
 	var all, grants []string
@@ -177,14 +188,16 @@ func (s *Service) appToken(id, thing string, now time.Time) (string, error) {
 	return s.serviceToken(auth.AppSubject+id, thing, grants, now)
 }
 
-func (s *Service) serviceToken(sub, thing string, grants []string, now time.Time) (string, error) {
+func (s *Service) serviceToken(sub, thing string, grants []string, now time.Time) (string, auth.Claims, error) {
 	lvl := 9
 	ttl := serviceTokenTTL
 	if s.grantsConfirmable(grants) {
 		ttl = confirmableTokenTTL
 	}
-	return auth.Sign(s.key, s.kid, auth.Claims{Iss: "auth", Aud: s.aud, Kind: auth.KindService, Sub: sub, Lvl: &lvl,
-		Grants: grants, Thing: thing, Iat: now.Unix(), Exp: now.Add(ttl).Unix(), Jti: randomID()})
+	c := auth.Claims{Iss: "auth", Aud: s.aud, Kind: auth.KindService, Sub: sub, Lvl: &lvl,
+		Grants: grants, Thing: thing, Iat: now.Unix(), Exp: now.Add(ttl).Unix(), Jti: randomID()}
+	tok, err := auth.Sign(s.key, s.kid, c)
+	return tok, c, err
 }
 
 // grantsConfirmable tells whether an exact grant covers a confirmable

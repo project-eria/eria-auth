@@ -107,6 +107,8 @@ func main() {
 	}
 	go backup.Run()
 	go svc.WatchThings(nil)
+	go store.PurgeJournal(nil)
+	svc.Started()
 	backup.Changed() // a first backup at each start
 	zlog.Info().Str("fingerprint", svc.kid).Msg("[main] auth key (compare with eria-manager auth-keyset)")
 

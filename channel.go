@@ -192,9 +192,9 @@ func (s *Service) Simulate(in SimulateIn) (SimulateOut, error) {
 		if s.store.db.QueryRow(`SELECT kid FROM apps WHERE id = ? AND kid != ''`, in.App).Scan(&kid) != nil {
 			return SimulateOut{}, ErrNotFound
 		}
-		tok, err = s.appToken(in.App, th.ID, s.now())
+		tok, _, err = s.appToken(in.App, th.ID, s.now())
 	} else {
-		tok, err = s.issue(t, p, in.Out, terminalTokenTTL)
+		tok, _, err = s.issue(t, p, in.Out, terminalTokenTTL, "")
 	}
 	if err != nil {
 		return SimulateOut{}, err

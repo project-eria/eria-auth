@@ -39,6 +39,7 @@ func (s *Service) RelayChallenge(r *http.Request) (string, error) {
 func (s *Service) RelayToken(r *http.Request, challenge string, sig []byte) (string, error) {
 	key, ok := relayPublicKey(r)
 	if !ok || !s.challenges.Redeem(challenge, key, []byte(challenge+domainRelayToken), sig) {
+		s.store.record(Entry{Type: "proof.relay", Result: "denied", Reason: "proof"})
 		return "", ErrDenied
 	}
 	grants, err := s.relayGrants()
@@ -52,7 +53,11 @@ func (s *Service) RelayToken(r *http.Request, challenge string, sig []byte) (str
 	s.mu.Lock()
 	s.relayToken[which] = s.now().Unix()
 	s.mu.Unlock()
-	return s.serviceToken(auth.AppSubject+"eria-ui-server-"+which, "", grants, s.now())
+	tok, c, err := s.serviceToken(auth.AppSubject+"eria-ui-server-"+which, "", grants, s.now())
+	if err == nil {
+		s.store.record(Entry{Type: "token.service", Subject: c.Sub, Jti: c.Jti, Detail: fmt.Sprintf("%d grants", len(c.Grants))})
+	}
+	return tok, err
 }
 
 func (s *Service) relayGrants() ([]string, error) {
