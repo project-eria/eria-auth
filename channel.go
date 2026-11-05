@@ -68,6 +68,10 @@ func (s *Service) ChannelHandler() http.Handler {
 	mux.HandleFunc("POST /v1/journal", receiveBatch(func(r *http.Request, doc auth.Signed) error {
 		return s.ReceiveJournal(sourceMaster, s.deploy, doc)
 	}))
+	// Whole days erased (§4.5), by the master's validated order.
+	mux.HandleFunc("POST /v1/journal/erase", receiveBatch(func(r *http.Request, doc auth.Signed) error {
+		return s.EraseJournal(doc)
+	}))
 	// The Things' journal lines (§4.5, step 5e-4), signed by their app's key.
 	mux.HandleFunc("POST /v1/things/journal", func(w http.ResponseWriter, r *http.Request) {
 		var in auth.SignedBy

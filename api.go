@@ -186,6 +186,19 @@ func (s *Service) Handler() http.Handler {
 			h(w, r)
 		}
 	}
+	// The journal (§4.5): read by the admin, the reading journaled.
+	mux.HandleFunc("GET /v1/journal", func(w http.ResponseWriter, r *http.Request) {
+		by, err := s.asAdmin(bearer(r))
+		if err != nil || isOut(r) {
+			reply(w, nil, ErrDenied)
+			return
+		}
+		q := r.URL.Query()
+		from, _ := strconv.ParseInt(q.Get("from"), 10, 64)
+		to, _ := strconv.ParseInt(q.Get("to"), 10, 64)
+		lines, err := s.ReadJournal(by, from, to, q.Get("session"))
+		reply(w, lines, err)
+	})
 	mux.HandleFunc("GET /v1/profiles", admin(func(w http.ResponseWriter, r *http.Request) {
 		list, err := s.Profiles()
 		reply(w, list, err)
