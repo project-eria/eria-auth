@@ -62,6 +62,7 @@ type Service struct {
 	acks       map[string]*ackSeen      // last acknowledgement of each app (watch.go)
 	alerted    map[string]time.Time     // last alert by "<kind>:<app>"
 	burst      bool                     // the « several isolated » alert is on
+	certExpiry time.Time                // of auth's TLS certificate, in the daily summary
 }
 
 func NewService(store *Store, pepper []byte, key ed25519.PrivateKey, aud string) *Service {

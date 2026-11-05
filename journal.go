@@ -41,7 +41,7 @@ const (
 // and the switches of mode (longKept).
 var (
 	shortKept = []string{"session.", "relay.", "guard.", "token.service", "proof.", "revocation.ack", "auth.start",
-		"thing.alert", "thing.td", "enroll.request", "enroll.cancelled", "document."}
+		"thing.alert", "thing.td", "enroll.request", "enroll.cancelled", "document.", "summary."}
 	longKept = []string{"guard.confirmable", "guard.mode"}
 )
 

@@ -122,6 +122,10 @@ func main() {
 	if err != nil {
 		zlog.Fatal().Err(err).Msg("[main] No TLS certificate: `eria-auth csr`, then eria-manager tls-sign --role auth")
 	}
+	if leaf, err := x509.ParseCertificate(cert.Certificate[0]); err == nil {
+		svc.certExpiry = leaf.NotAfter
+	}
+	go svc.SendSummaries(nil)
 	roots := x509.NewCertPool()
 	if data, err := os.ReadFile(config.Roots); err != nil || !roots.AppendCertsFromPEM(data) {
 		zlog.Fatal().Str("file", config.Roots).Msg("[main] No deployment root (eria-manager tls-root)")
