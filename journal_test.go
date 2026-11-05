@@ -253,3 +253,40 @@ func TestJournalSources(t *testing.T) {
 	assert.Equal(t, keepShort, h.last("relay.denied").Keep)
 	assert.Equal(t, sourceMaster, h.last("order.validated").Source)
 }
+
+// Step 5e-4: an app's Things, by its key: guard.* only, a confirmation used
+// twice alerted with the Thing's id when the app owns it.
+func TestThingJournal(t *testing.T) {
+	h := newHouse(t)
+	_, deployPriv, _ := ed25519.GenerateKey(rand.Reader)
+	deploy, _ := auth.ParsePublicKey(auth.Ed25519, deployPriv.Public().(ed25519.PublicKey))
+	h.svc.deploy = []auth.PublicKey{deploy}
+	channel := httptest.NewServer(h.svc.ChannelHandler())
+	t.Cleanup(channel.Close)
+	h.srv.URL = channel.URL
+	pub, app, _ := ed25519.GenerateKey(rand.Reader)
+	key, _ := auth.SignDocument(deployPriv, auth.AppKeyPrefix,
+		auth.AppKey{App: "garage", Node: "rdc", Pubkey: base64.RawURLEncoding.EncodeToString(pub), Version: 1})
+	require.Equal(t, 200, h.call("POST", "/v1/apps/keys", "", key, nil))
+	td, _ := auth.SignBy(app, auth.TDPrefix, map[string]any{"id": "urn:eria:garage:1", "title": "Garage"})
+	require.Equal(t, 200, h.call("POST", "/v1/things/td", "", td, nil))
+	post := func(seq int64, key ed25519.PrivateKey, lines ...auth.Line) int {
+		b, _ := auth.SignBy(key, auth.JournalPrefix, auth.JournalBatch{Seq: seq, Lines: lines})
+		return h.call("POST", "/v1/things/journal", "", b, nil)
+	}
+	at := h.now.Unix()
+	assert.Equal(t, 200, post(1, app,
+		auth.Line{At: at, Type: "guard.confirmable", Subject: "profil:1", Object: "urn:eria:garage:1", Jti: "s.1"},
+		auth.Line{At: at, Type: "guard.denied", Object: "urn:eria:garage:1", Result: "denied", Reason: "step 7"},
+		auth.Line{At: at, Type: "order.validated"}))
+	got := h.last("guard.confirmable")
+	assert.True(t, strings.HasPrefix(got.Source, "app:"), got.Source)
+	assert.Equal(t, keepLong, got.Keep)
+	assert.Equal(t, keepShort, h.last("guard.denied").Keep)
+	assert.Equal(t, "type", h.last("document.refused").Reason)
+
+	assert.Equal(t, 200, post(2, app, auth.Line{At: at, Type: "guard.denied", Object: "urn:eria:garage:1", Result: "denied", Reason: "reused"}))
+	assert.Contains(t, h.alert, "Jeton réutilisé : urn:eria:garage:1")
+	_, other, _ := ed25519.GenerateKey(rand.Reader)
+	assert.Equal(t, 403, post(3, other, auth.Line{At: at, Type: "guard.start"}), "an unknown key")
+}

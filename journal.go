@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -35,11 +36,19 @@ const (
 	keepShort = 30
 )
 
-// shortKept are the comfort types; every other one is administration.
-var shortKept = []string{"session.", "relay.", "token.service", "proof.", "revocation.ack", "auth.start",
-	"thing.alert", "thing.td", "enroll.request", "enroll.cancelled", "document."}
+// shortKept are the comfort types; every other one is administration. The
+// Things' lines are comfort, but for the commands of a confirmable function
+// and the switches of mode (longKept).
+var (
+	shortKept = []string{"session.", "relay.", "guard.", "token.service", "proof.", "revocation.ack", "auth.start",
+		"thing.alert", "thing.td", "enroll.request", "enroll.cancelled", "document."}
+	longKept = []string{"guard.confirmable", "guard.mode"}
+)
 
 func keepOf(typ string) int {
+	if slices.Contains(longKept, typ) {
+		return keepLong
+	}
 	for _, p := range shortKept {
 		if strings.HasPrefix(typ, p) {
 			return keepShort
@@ -140,12 +149,24 @@ func (s *Service) Started() {
 	s.store.record(Entry{Type: "auth.start"})
 }
 
-// Sources that hand auth their lines (step 5e-3); each writes its own types
-// only: order.* for the master, relay.* for eria-ui-server.
+// Sources that hand auth their lines (steps 5e-3, 5e-4); each writes its
+// own types only: order.* for the master, relay.* for eria-ui-server,
+// guard.* for the Things of an app.
 const (
 	sourceMaster = "maitre"
 	sourceRelay  = "eria-ui-server-" // + interieur or exterieur
+	sourceApp    = auth.AppSubject   // + the app's id
 )
+
+func prefixOf(source string) string {
+	switch {
+	case source == sourceMaster:
+		return "order."
+	case strings.HasPrefix(source, sourceApp):
+		return "guard."
+	}
+	return "relay."
+}
 
 // ReceiveJournal takes a batch of lines signed by one of keys for source,
 // once: a batch whose seq isn't above the last taken is skipped. The line's
@@ -158,10 +179,7 @@ func (s *Service) ReceiveJournal(source string, keys []auth.PublicKey, doc auth.
 		s.alertOnce("signature:"+source, "Signature invalide : "+source)
 		return ErrDenied
 	}
-	prefix := "relay."
-	if source == sourceMaster {
-		prefix = "order."
-	}
+	prefix := prefixOf(source)
 	var last int64
 	s.store.db.QueryRow(`SELECT seq FROM journal_sources WHERE source = ?`, source).Scan(&last)
 	if b.Seq <= last {
@@ -181,8 +199,32 @@ func (s *Service) ReceiveJournal(source string, keys []auth.PublicKey, doc auth.
 		}
 		s.store.record(Entry{Source: source, Type: l.Type, Subject: l.Subject, Object: l.Object,
 			Result: l.Result, Reason: l.Reason, Jti: l.Jti, Detail: l.Detail})
+		if l.Reason == "reused" { // a confirmation used twice, on a Thing
+			s.alertOnce("reused:"+source, "Jeton réutilisé : "+s.thingOf(source, l.Object))
+		}
 	}
 	_, err := s.store.db.Exec(`INSERT INTO journal_sources (source, seq) VALUES (?, ?)
 		ON CONFLICT (source) DO UPDATE SET seq = excluded.seq`, source, b.Seq)
 	return err
+}
+
+// ReceiveThingJournal takes a batch of an app's Things, signed by its key.
+func (s *Service) ReceiveThingJournal(signed auth.SignedBy) error {
+	id, pub, err := s.appKey(signed.Kid)
+	if err != nil {
+		return ErrDenied
+	}
+	return s.ReceiveJournal(sourceApp+id, []auth.PublicKey{pub}, signed.Signed)
+}
+
+// thingOf names a Thing in an alert: its id when the source's app owns it,
+// else the app's name, never other text from the source (G16).
+func (s *Service) thingOf(source, thing string) string {
+	app := strings.TrimPrefix(source, sourceApp)
+	var owned int
+	s.store.db.QueryRow(`SELECT count(*) FROM things WHERE id = ? AND app = ?`, thing, app).Scan(&owned)
+	if owned == 0 {
+		return s.appName(app)
+	}
+	return thing
 }

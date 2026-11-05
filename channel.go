@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
@@ -67,6 +68,15 @@ func (s *Service) ChannelHandler() http.Handler {
 	mux.HandleFunc("POST /v1/journal", receiveBatch(func(r *http.Request, doc auth.Signed) error {
 		return s.ReceiveJournal(sourceMaster, s.deploy, doc)
 	}))
+	// The Things' journal lines (§4.5, step 5e-4), signed by their app's key.
+	mux.HandleFunc("POST /v1/things/journal", func(w http.ResponseWriter, r *http.Request) {
+		var in auth.SignedBy
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&in); err != nil {
+			reply(w, nil, ErrInvalid)
+			return
+		}
+		reply(w, nil, s.ReceiveThingJournal(in))
+	})
 	mux.HandleFunc("POST /v1/service/challenge", handle(func(r *http.Request, in struct{ Kid string }) (any, error) {
 		ch, err := s.ServiceChallenge(in.Kid)
 		return map[string]string{"challenge": ch}, err
