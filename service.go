@@ -210,10 +210,14 @@ func (s *Service) activeTerminal(p Proof, domain, data string) (Terminal, error)
 }
 
 // TerminalToken is the signed-out token of an active terminal (§3.4), 72 h.
-func (s *Service) TerminalToken(p Proof, out bool) (string, error) {
+// profileExpires: an iPhone's provisioning profile (§1.2), for the summary.
+func (s *Service) TerminalToken(p Proof, out bool, profileExpires string) (string, error) {
 	t, err := s.activeTerminal(p, domainTerminal, "")
 	if err != nil {
 		return "", err
+	}
+	if at, err := time.Parse(time.RFC3339, profileExpires); err == nil {
+		s.store.db.Exec(`UPDATE terminals SET profile_expires = ? WHERE id = ?`, at.Unix(), t.ID)
 	}
 	tok, _, err := s.issue(t, nil, out, terminalTokenTTL, "")
 	return tok, err

@@ -188,7 +188,10 @@ func TestEnrollAndSessions(t *testing.T) {
 	assert.Equal(t, "active", term.Status)
 	assert.Equal(t, 404, h.call("GET", "/v1/requests/"+r.ID, "", nil, nil), "the request is used")
 	require.Equal(t, 200, h.call("POST", "/v1/terminal-token", "", map[string]any{
-		"proof": h.proof(screen, domainTerminal, "")}, &tok))
+		"proof": h.proof(screen, domainTerminal, ""), "profileExpires": "2027-11-05T10:00:00Z"}, &tok))
+	var expires int64
+	h.svc.store.db.QueryRow(`SELECT profile_expires FROM terminals WHERE id = ?`, term.ID).Scan(&expires)
+	assert.Equal(t, time.Date(2027, 11, 5, 10, 0, 0, 0, time.UTC).Unix(), expires, "an iPhone's profile, for the summary")
 	c := h.claims(tok.Token)
 	assert.Equal(t, 9, *c.Lvl)
 	assert.Equal(t, "salon", c.Zone)

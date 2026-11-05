@@ -54,8 +54,11 @@ func (s *Service) Handler() http.Handler {
 		id, err := s.Bootstrap(in, isOut(r))
 		return map[string]string{"terminal": id}, err
 	}))
-	mux.HandleFunc("POST /v1/terminal-token", handle(func(r *http.Request, in struct{ Proof Proof }) (any, error) {
-		tok, err := s.TerminalToken(in.Proof, isOut(r))
+	mux.HandleFunc("POST /v1/terminal-token", handle(func(r *http.Request, in struct {
+		Proof          Proof
+		ProfileExpires string // iOS provisioning profile, RFC 3339
+	}) (any, error) {
+		tok, err := s.TerminalToken(in.Proof, isOut(r), in.ProfileExpires)
 		return map[string]string{"token": tok}, err
 	}))
 	mux.HandleFunc("POST /v1/sessions", handle(func(r *http.Request, in struct {

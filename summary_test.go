@@ -18,6 +18,8 @@ func TestSummary(t *testing.T) {
 	require.NoError(t, err)
 	db.Exec(`INSERT INTO things (id, title, functions, adopted) VALUES ('urn:eria:garage:1', 'Garage', '["action/open/invoke","property/x/read"]', 1)`)
 	db.Exec(`INSERT INTO terminals (id, name, type, status, last_seen) VALUES ('t1', 'Écran cuisine', 'fixed', 'active', ?)`, h.now.Add(-48*time.Hour).Unix())
+	db.Exec(`INSERT INTO terminals (id, name, type, status, profile_expires) VALUES ('p1', 'iPhone de Paul', 'phone', 'active', ?), ('p2', 'iPhone de Léa', 'phone', 'active', ?)`,
+		h.now.Add(20*24*time.Hour).Unix(), h.now.Add(60*24*time.Hour).Unix())
 	db.Exec(`INSERT INTO grants (profile, grant, expires, added) VALUES (1, 'thing:urn:eria:garage:1', ?, 0)`, h.now.Add(48*time.Hour).Unix())
 
 	yesterday := time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC).Unix()
@@ -44,11 +46,13 @@ func TestSummary(t *testing.T) {
 		"- urn:eria:garage:1 : 2", // no capability adopted: no default, no rule
 		"- Écran cuisine",
 		"accès thing:urn:eria:garage:1 de Paul le 2026-11-07",
+		"profil iOS de iPhone de Paul le 2026-11-25",
 		"Empreinte 30 j : ",
 	} {
 		assert.Contains(t, text, want)
 	}
 	assert.NotContains(t, text, "Empreinte 30 j : aucune ligne")
+	assert.NotContains(t, text, "profil iOS de iPhone de Léa", "more than 30 days away")
 	h.svc.sendSummary()
 	assert.Len(t, h.alert, 1, "sent once")
 

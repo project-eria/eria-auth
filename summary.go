@@ -216,7 +216,8 @@ func (s *Service) mutedTerminals() []string {
 }
 
 // expiries are the grants ending within a week, the enrollments and new
-// Face ID keys waiting for the admin, and auth's certificate.
+// Face ID keys waiting for the admin, the iPhones' profiles and auth's
+// certificate.
 func (s *Service) expiries() []string {
 	now := s.now()
 	var out []string
@@ -239,6 +240,17 @@ func (s *Service) expiries() []string {
 	}
 	if keys > 0 {
 		out = append(out, fmt.Sprintf("nouvelles clés Face ID en attente : %d", keys))
+	}
+	rows, err = s.store.db.Query(`SELECT name, profile_expires FROM terminals
+		WHERE status = 'active' AND profile_expires > 0 AND profile_expires <= ? ORDER BY profile_expires`, now.Add(certSoon).Unix())
+	if err == nil {
+		for rows.Next() {
+			var name string
+			var expires int64
+			rows.Scan(&name, &expires)
+			out = append(out, fmt.Sprintf("profil iOS de %s le %s (réinstaller l'app)", name, time.Unix(expires, 0).UTC().Format(time.DateOnly)))
+		}
+		rows.Close()
 	}
 	if !s.certExpiry.IsZero() && s.certExpiry.Sub(now) < certSoon {
 		out = append(out, "certificat d'auth le "+s.certExpiry.UTC().Format(time.DateOnly))

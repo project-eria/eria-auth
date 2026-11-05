@@ -162,6 +162,7 @@ func OpenStore(path string) (*Store, error) {
 	// Databases made before the column: the error once it exists is expected.
 	db.Exec(`ALTER TABLE terminals ADD COLUMN device TEXT NOT NULL DEFAULT ''`)
 	db.Exec(`ALTER TABLE terminals ADD COLUMN validator INTEGER NOT NULL DEFAULT 0`)
+	db.Exec(`ALTER TABLE terminals ADD COLUMN profile_expires INTEGER NOT NULL DEFAULT 0`) // an iPhone's profile (step 5h)
 	db.Exec(`ALTER TABLE keys ADD COLUMN since INTEGER NOT NULL DEFAULT 0`)                  // a pending bio key: when it came
 	db.Exec(`ALTER TABLE things ADD COLUMN app TEXT NOT NULL DEFAULT ''`)                    // id of the app that signs its TD (step 3d)
 	db.Exec(`ALTER TABLE apps ADD COLUMN grants TEXT NOT NULL DEFAULT '[]'`)                 // accepted by the admin (step 4)
