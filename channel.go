@@ -64,6 +64,10 @@ func (s *Service) ChannelHandler() http.Handler {
 	mux.HandleFunc("POST /v1/apps/keys", handle(func(r *http.Request, in auth.Signed) (any, error) {
 		return nil, s.RegisterAppKey(in)
 	}))
+	// The master's registry of admin keys (piste 7), signed by the deployment key.
+	mux.HandleFunc("POST /v1/admin/keys", handle(func(r *http.Request, in auth.Signed) (any, error) {
+		return nil, s.ApplyAdminKeys(in)
+	}))
 	// The master's journal lines (§4.5), signed by the deployment key.
 	mux.HandleFunc("POST /v1/journal", receiveBatch(func(r *http.Request, doc auth.Signed) error {
 		return s.ReceiveJournal(sourceMaster, s.deploy, doc)
