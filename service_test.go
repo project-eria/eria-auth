@@ -104,7 +104,7 @@ func (h *house) proof(k signerKey, domain, data string) Proof {
 }
 
 func (h *house) claims(token string) auth.Claims {
-	c, _, err := auth.Parse(token, h.svc.lookup)
+	c, err := auth.Parse(token, h.svc.lookup)
 	require.NoError(h.t, err)
 	return c
 }

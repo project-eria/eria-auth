@@ -261,9 +261,9 @@ func (s *Service) issue(t Terminal, p *Profile, out bool, ttl time.Duration, sid
 }
 
 // lookup verifies the tokens auth itself issued (admin API, blocking).
-func (s *Service) lookup(kid string) (auth.PublicKey, bool, bool) {
+func (s *Service) lookup(kid string) (auth.PublicKey, bool) {
 	pub, _ := auth.ParsePublicKey(auth.Ed25519, s.key.Public().(ed25519.PublicKey))
-	return pub, false, kid == s.kid
+	return pub, kid == s.kid
 }
 
 // Caller is the authenticated holder of a token, after revocation checks.

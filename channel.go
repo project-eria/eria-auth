@@ -261,7 +261,7 @@ func (s *Service) Simulate(in SimulateIn) (SimulateOut, error) {
 	}
 	if d.Claims.Lvl != nil {
 		out.Level = *d.Claims.Lvl
-	} else if c, _, err := auth.Parse(tok, s.lookup); err == nil && c.Lvl != nil {
+	} else if c, err := auth.Parse(tok, s.lookup); err == nil && c.Lvl != nil {
 		out.Level = *c.Lvl
 	}
 	return out, nil
