@@ -246,7 +246,10 @@ func printFingerprint(key ed25519.PrivateKey, out io.Writer) error {
 }
 
 // cmdCSR makes the TLS private key on this node (if absent) and prints its
-// certificate request, for eria-manager tls-sign --role auth.
+// certificate request, for eria-manager tls-sign --role auth. With a signing
+// key here, a last line « csr-sig: <base64url> » signs the request's DER
+// (auth.CSRPrefix): the guided restore ties the CSR to the key the admin
+// compared.
 func cmdCSR(args []string, out io.Writer) error {
 	fs, c := commandFlags("csr")
 	if err := fs.Parse(args); err != nil {
@@ -276,7 +279,15 @@ func cmdCSR(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	return pem.Encode(out, &pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})
+	if err := pem.Encode(out, &pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der}); err != nil {
+		return err
+	}
+	if key, err := readKey(c.KeyFile); err == nil {
+		sig := ed25519.Sign(key, append([]byte(auth.CSRPrefix), der...))
+		_, err = fmt.Fprintf(out, "csr-sig: %s\n", base64.RawURLEncoding.EncodeToString(sig))
+		return err
+	}
+	return nil
 }
 
 func readKey(path string) (ed25519.PrivateKey, error) {
