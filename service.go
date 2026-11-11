@@ -352,9 +352,15 @@ func (s *Service) RevocationDoc() (string, error) {
 	return tok, err
 }
 
+// revoked is auth's own check. "term:*" spares a terminal still active with
+// its key: the admin's computer, kept by « revoke every terminal » (its
+// tokens fall at the Things only, renewed there on their own). A terminal
+// enrolled again or unblocked since has its own entry or no key.
 func (s *Service) revoked(c auth.Claims) bool {
 	var n int
-	s.store.db.QueryRow(`SELECT count(*) FROM revocations WHERE (subject = ? OR subject = ?) AND ? < before`,
-		"term:"+c.Term, "sub:"+c.Sub, c.Iat).Scan(&n)
+	s.store.db.QueryRow(`SELECT count(*) FROM revocations WHERE ? < before AND (subject = ? OR subject = ?
+		OR subject = 'term:*' AND ? != '' AND NOT EXISTS (SELECT 1 FROM terminals t JOIN keys k ON k.terminal = t.id
+			WHERE t.id = ? AND t.status = 'active' AND k.role = 'identity'))`,
+		c.Iat, "term:"+c.Term, "sub:"+c.Sub, c.Term, c.Term).Scan(&n)
 	return n > 0
 }

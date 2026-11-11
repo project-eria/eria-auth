@@ -330,6 +330,19 @@ func TestRevokeAll(t *testing.T) {
 	assert.Equal(t, 403, h.call("POST", "/v1/challenge", "", map[string]string{"kid": screen.kid}, nil), "its key is gone")
 	assert.Equal(t, 200, h.call("POST", "/v1/terminal-token", "", map[string]any{
 		"proof": h.proof(pc, domainTerminal, "")}, nil), "the admin's computer stays")
+
+	// One dated entry for every terminal (piste 3): the Things drop every
+	// terminal's older tokens; auth keeps the admin's session open.
+	doc, err := h.svc.RevocationDoc()
+	require.NoError(t, err)
+	d, err := auth.ParseDoc(doc, h.svc.lookup, h.svc.aud, auth.DocRevocation, "x")
+	require.NoError(t, err)
+	assert.Contains(t, d.Revoked, auth.Revocation{Subject: "term:*", Before: h.now.Unix() + 1})
+	for _, r := range d.Revoked {
+		assert.NotEqual(t, "term:"+e.ID, r.Subject, "no entry per terminal")
+	}
+	assert.Equal(t, 200, h.call("GET", "/v1/terminals", admin, nil, nil), "the admin's session stays at auth")
+	assert.True(t, h.svc.revoked(auth.Claims{Term: e.ID, Iat: h.now.Unix()}), "a revoked screen's token falls at auth")
 }
 
 // TestReenroll: a request bound to an existing terminal replaces its key and

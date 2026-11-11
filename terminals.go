@@ -325,17 +325,10 @@ func (s *Service) RevokeAll(p Proof, by Caller) (int, error) {
 		return 0, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.Query(`SELECT id FROM terminals WHERE id != ?`, by.Term)
-	if err != nil {
+	var n int
+	if err := tx.QueryRow(`SELECT count(*) FROM terminals WHERE id != ?`, by.Term).Scan(&n); err != nil {
 		return 0, err
 	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		rows.Scan(&id)
-		ids = append(ids, id)
-	}
-	rows.Close()
 	for _, q := range []string{
 		`DELETE FROM keys WHERE role IN ('identity', 'bio') AND terminal IN (SELECT id FROM terminals WHERE id != ?)`,
 		`UPDATE terminals SET status = 'blocked' WHERE id != ?`,
@@ -350,13 +343,12 @@ func (s *Service) RevokeAll(p Proof, by Caller) (int, error) {
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
-	for _, id := range ids {
-		s.revoke("term:" + id)
-	}
+	// One dated entry for every terminal, the list stays small (§2.10).
+	s.revoke("term:*")
 	s.bumpConfig()
-	s.store.log("terminals.revoke-all", fmt.Sprintf("%d terminals, kept %s", len(ids), by.Term))
-	s.notify(fmt.Sprintf("Tous les terminaux révoqués (%d)", len(ids)))
-	return len(ids), nil
+	s.store.log("terminals.revoke-all", fmt.Sprintf("%d terminals, kept %s", n, by.Term))
+	s.notify(fmt.Sprintf("Tous les terminaux révoqués (%d)", n))
+	return n, nil
 }
 
 // --- Bootstrap (§3.5) ---
