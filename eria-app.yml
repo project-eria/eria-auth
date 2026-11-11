@@ -11,9 +11,11 @@ exec:
   # Before the first start, in a shell on the node, in {data}:
   #   eria-auth bootstrap   (signing key + one-time code), then eria-manager auth-keyset on the master
   #   eria-auth csr         (TLS key), then eria-manager tls-sign --role auth and tls-root
-  # ERIA_AUTH_PEPPER comes from eria-manager auth-secrets, in the deployment config only.
+  # ERIA_AUTH_PEPPER comes from eria-manager auth-secrets (its auth-pepper file): the master
+  # seals it to the app key on the node, never in clear (AUTH-DESIGN §4.2).
   # The files (database, keys, certificates) are in {data}.
-  env: ["ERIA_AUTH_DATA={data}", "ERIA_AUTH_PEPPER=<from eria-manager auth-secrets>"]
+  env: ["ERIA_AUTH_DATA={data}"]
+  secrets: ["ERIA_AUTH_PEPPER"]
 
 config: |
   location: Europe/Paris
