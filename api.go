@@ -351,8 +351,9 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/relay/token", handle(func(r *http.Request, in struct {
 		Challenge string
 		Sig       []byte
+		Thing     string // "" for the master
 	}) (any, error) {
-		tok, err := s.RelayToken(r, in.Challenge, in.Sig)
+		tok, err := s.RelayToken(r, in.Challenge, in.Sig, in.Thing)
 		return map[string]string{"token": tok}, err
 	}))
 	// The relay's journal lines (§4.5), signed by its certificate key.

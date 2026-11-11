@@ -136,8 +136,6 @@ func TestRelayToken(t *testing.T) {
 		json.NewDecoder(resp.Body).Decode(out)
 		return resp.StatusCode
 	}
-	var ch struct{ Challenge string }
-	require.Equal(t, 200, post("/v1/relay/challenge", "", &ch))
 	sign := func(key *ecdsa.PrivateKey, msg string) []byte {
 		hash := sha256.Sum256([]byte(msg))
 		r, s, _ := ecdsa.Sign(rand.Reader, key, hash[:])
@@ -147,14 +145,33 @@ func TestRelayToken(t *testing.T) {
 		return sig
 	}
 	other, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	body := func(key *ecdsa.PrivateKey) string {
-		b, _ := json.Marshal(map[string]any{"challenge": ch.Challenge, "sig": sign(key, ch.Challenge+domainRelayToken)})
-		return string(b)
+	key := relay.PrivateKey.(*ecdsa.PrivateKey)
+	token := func(key *ecdsa.PrivateKey, thing string) (int, auth.Claims) {
+		var ch struct{ Challenge string }
+		require.Equal(t, 200, post("/v1/relay/challenge", "", &ch))
+		b, _ := json.Marshal(map[string]any{"challenge": ch.Challenge, "sig": sign(key, ch.Challenge+domainRelayToken), "thing": thing})
+		var tok struct{ Token string }
+		code := post("/v1/relay/token", string(b), &tok)
+		if code != 200 {
+			return code, auth.Claims{}
+		}
+		return code, h.claims(tok.Token)
 	}
-	var tok struct{ Token string }
-	assert.Equal(t, 403, post("/v1/relay/token", body(other), &tok), "an app can't sign with the relay's key")
-	require.Equal(t, 200, post("/v1/relay/token", body(relay.PrivateKey.(*ecdsa.PrivateKey)), &tok))
-	claims := h.claims(tok.Token)
-	assert.Equal(t, auth.KindService, claims.Kind)
-	assert.ElementsMatch(t, []string{"room:garage:read", "thing:urn:eria:meteo:1:read"}, claims.Grants)
+	code, _ := token(other, "")
+	assert.Equal(t, 403, code, "an app can't sign with the relay's key")
+
+	// One token per Thing, its grants on it only (§4.7 step 4e).
+	_, tc := token(key, "eria:garage:1")
+	assert.Equal(t, auth.KindService, tc.Kind)
+	assert.Equal(t, "urn:eria:garage:1", tc.Thing, "found by its DNS-SD instance")
+	assert.Equal(t, []string{"room:garage:read"}, tc.Grants)
+	_, tc = token(key, "urn:eria:meteo:1")
+	assert.Equal(t, []string{"thing:urn:eria:meteo:1:read"}, tc.Grants, "no room: the Thing itself")
+	_, tc = token(key, "urn:eria:new:1")
+	assert.Empty(t, tc.Grants, "not adopted")
+	code, _ = token(key, "urn:eria:inconnu:1")
+	assert.Equal(t, 404, code)
+	_, tc = token(key, "")
+	assert.Empty(t, tc.Thing, "the master's token")
+	assert.Empty(t, tc.Grants)
 }

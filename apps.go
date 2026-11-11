@@ -150,10 +150,7 @@ func (s *Service) ServiceToken(kid, challenge string, sig []byte, thing string) 
 		return "", ErrDenied
 	}
 	if thing != "" {
-		t, err := s.thing(thing)
-		if errors.Is(err, ErrNotFound) {
-			t, err = s.thing("urn:" + thing)
-		}
+		t, err := s.findThing(thing)
 		if err != nil {
 			return "", err
 		}
@@ -166,6 +163,16 @@ func (s *Service) ServiceToken(kid, challenge string, sig []byte, thing string) 
 		s.store.record(Entry{Type: "token.service", Subject: c.Sub, Object: thing, Jti: c.Jti, Detail: strings.Join(c.Grants, " ")})
 	}
 	return tok, err
+}
+
+// findThing finds a Thing by its TD id, or its DNS-SD instance (the id
+// without "urn:", as the master's inventory gives it).
+func (s *Service) findThing(thing string) (ThingRecord, error) {
+	t, err := s.thing(thing)
+	if errors.Is(err, ErrNotFound) {
+		t, err = s.thing("urn:" + thing)
+	}
+	return t, err
 }
 
 // appToken is the token of app id for thing, carrying only the app's
