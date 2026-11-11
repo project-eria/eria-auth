@@ -197,19 +197,14 @@ func (s *Service) appToken(id, thing string, now time.Time) (string, auth.Claims
 
 func (s *Service) serviceToken(sub, thing string, grants []string, now time.Time) (string, auth.Claims, error) {
 	lvl := 9
-	ttl := serviceTokenTTL
-	if s.grantsConfirmable(grants) {
-		ttl = confirmableTokenTTL
-	}
 	c := auth.Claims{Iss: "auth", Aud: s.aud, Kind: auth.KindService, Sub: sub, Lvl: &lvl,
-		Grants: grants, Thing: thing, Iat: now.Unix(), Exp: now.Add(ttl).Unix(), Jti: randomID()}
+		Grants: grants, Thing: thing, Iat: now.Unix(), Exp: now.Add(serviceTokenTTL).Unix(), Jti: randomID()}
 	tok, err := auth.Sign(s.key, s.kid, c)
 	return tok, c, err
 }
 
 // grantsConfirmable tells whether an exact grant covers a confirmable
-// function of today's tables: the token must then last 5 min at most, or
-// step 8 refuses it. A table changed later is seen at the next token.
+// function of today's tables (shown on the grant, journaled a year).
 func (s *Service) grantsConfirmable(grants []string) bool {
 	for _, g := range grants {
 		scope, rest, _ := strings.Cut(g, ":")

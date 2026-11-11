@@ -76,7 +76,7 @@ func TestAppKeys(t *testing.T) {
 	assert.Equal(t, auth.KindService, c.Kind)
 	assert.Equal(t, 9, *c.Lvl)
 	assert.Empty(t, c.Grants, "grants come with step 4")
-	assert.Equal(t, int64(15*60), c.Exp-c.Iat)
+	assert.Equal(t, int64(5*60), c.Exp-c.Iat)
 	var apps []AppOut
 	require.Equal(t, 200, h.call("GET", "/v1/apps", admin, nil, &apps))
 	require.Len(t, apps, 1)
@@ -224,22 +224,20 @@ func TestAppGrants(t *testing.T) {
 	c = token("eria:garage:1")
 	assert.Equal(t, garage, c.Thing)
 	assert.Equal(t, []string{"room:garage:read"}, c.Grants)
-	assert.Equal(t, int64(15*60), c.Exp-c.Iat)
+	assert.Equal(t, int64(5*60), c.Exp-c.Iat)
 	ch, _ := h.svc.ServiceChallenge(key.KID())
 	_, err := h.svc.ServiceToken(key.KID(), ch, ed25519.Sign(priv, auth.ServiceProof(ch, h.svc.kid)), "urn:eria:nowhere")
 	assert.ErrorIs(t, err, ErrNotFound, "a Thing auth doesn't know")
 
-	// A grant added: the tokens stay. On the garage's open (confirmable): 5 min.
+	// A grant added: the tokens stay.
 	h.now = h.now.Add(time.Second)
 	require.NoError(t, register("room:piscine:*", "room:garage:read", "thing:"+garage+":invoke"))
 	assert.False(t, h.svc.revoked(c))
 	c = token(garage)
-	assert.Equal(t, int64(5*60), c.Exp-c.Iat)
 	require.NoError(t, register("room:piscine:*", "thing:"+garage+":read"))
 	assert.True(t, h.svc.revoked(c), "a grant removed")
 	h.now = h.now.Add(time.Second)
 	c = token(garage)
-	assert.Equal(t, int64(15*60), c.Exp-c.Iat, "reading is never confirmed")
 	assert.Equal(t, []string{"thing:" + garage + ":read"}, c.Grants)
 	assert.False(t, h.svc.revoked(c), "the next token carries the new set")
 }
