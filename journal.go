@@ -38,11 +38,11 @@ const (
 
 // shortKept are the comfort types; every other one is administration. The
 // Things' lines are comfort, but for the commands of a confirmable function
-// and the switches of mode (longKept).
+// the switches of mode and the times set (longKept).
 var (
 	shortKept = []string{"session.", "relay.", "guard.", "token.service", "proof.", "revocation.ack", "auth.start",
 		"thing.alert", "thing.td", "enroll.request", "enroll.cancelled", "document.", "summary."}
-	longKept = []string{"guard.confirmable", "guard.mode"}
+	longKept = []string{"guard.confirmable", "guard.mode", "guard.time"}
 )
 
 func keepOf(typ string) int {
