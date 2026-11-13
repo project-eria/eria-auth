@@ -14,7 +14,7 @@ type Store struct {
 	db      *sql.DB
 	now     func() time.Time // overridable by tests
 	changed func()           // called after each change of the state (backup)
-	written chan struct{}    // a journal line written: copy it to the master
+	written chan struct{}    // a journal line written: copy it to the coordinator
 }
 
 func OpenStore(path string) (*Store, error) {
@@ -122,7 +122,7 @@ func OpenStore(path string) (*Store, error) {
 			confirm TEXT NOT NULL DEFAULT '',
 			PRIMARY KEY (thing, state, key)
 		);
-		-- App keys (§1.3): registered by the master, kid '' once retired. The
+		-- App keys (§1.3): registered by the coordinator, kid '' once retired. The
 		-- id is the app's identity (sub app:<id>), kept across its keys.
 		CREATE TABLE IF NOT EXISTS apps (
 			id         TEXT PRIMARY KEY,
@@ -130,7 +130,7 @@ func OpenStore(path string) (*Store, error) {
 			node       TEXT NOT NULL DEFAULT '',
 			kid        TEXT NOT NULL DEFAULT '',
 			raw        BLOB, -- Ed25519 public key
-			version    INTEGER NOT NULL, -- of the master's last message, ms
+			version    INTEGER NOT NULL, -- of the coordinator's last message, ms
 			registered INTEGER NOT NULL,
 			last_token INTEGER NOT NULL DEFAULT 0
 		);

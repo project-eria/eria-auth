@@ -13,12 +13,12 @@ import (
 	"github.com/project-eria/go-wot/auth"
 )
 
-// App keys and service tokens (AUTH-DESIGN §1.3, step 3a). The master
+// App keys and service tokens (AUTH-DESIGN §1.3, step 3a). The coordinator
 // registers each app's key with a message signed by the deployment key;
 // auth gives the app an id, the sub of its tokens (app:<id>), kept when the
 // app moves to a new key. The app proves its key on the Things channel and
 // gets a service token: an invited guest, plus the grants the admin accepted
-// at deployment, carried by the master's message (step 4).
+// at deployment, carried by the coordinator's message (step 4).
 
 // AppOut is an app as the admin screens show it.
 type AppOut struct {
@@ -40,7 +40,7 @@ func (s *Service) RegisterAppKey(signed auth.Signed) error {
 	var k auth.AppKey
 	if err := signed.Open(auth.AppKeyPrefix, s.deploy, &k); err != nil || k.App == "" {
 		s.store.record(Entry{Type: "document.refused", Object: "app-key", Result: "denied", Reason: "signature"})
-		s.alertOnce("signature:master", "Signature invalide : maître")
+		s.alertOnce("signature:coordinator", "Signature invalide : coordinateur")
 		return ErrDenied
 	}
 	if auth.ValidGrants(k.Grants) != nil {
@@ -79,7 +79,7 @@ func (s *Service) RegisterAppKey(signed auth.Signed) error {
 	case k.Version <= version:
 		return ErrDenied // replayed or older than the key held
 	case kid != "" && kid == held:
-		// The master says it again (it restarted, or the admin accepted
+		// The coordinator says it again (it restarted, or the admin accepted
 		// another set of grants): its tokens stay, unless a grant went.
 		_, err = s.store.db.Exec(`UPDATE apps SET node = ?, version = ?, grants = ? WHERE id = ?`, k.Node, k.Version, grants, id)
 		if err != nil || grants == heldGrants {
@@ -137,8 +137,8 @@ func (s *Service) ServiceChallenge(kid string) (string, error) {
 
 // ServiceToken checks the app's signature over auth.ServiceProof and issues
 // its service token for thing (step 4e): its TD id, or its DNS-SD instance
-// (the id without "urn:"), read from the master's inventory. thing "" is the
-// master's token: no grants, it only reads the inventory.
+// (the id without "urn:"), read from the coordinator's inventory. thing "" is the
+// coordinator's token: no grants, it only reads the inventory.
 func (s *Service) ServiceToken(kid, challenge string, sig []byte, thing string) (string, error) {
 	id, pub, err := s.appKey(kid)
 	if err != nil {
@@ -166,7 +166,7 @@ func (s *Service) ServiceToken(kid, challenge string, sig []byte, thing string) 
 }
 
 // findThing finds a Thing by its TD id, or its DNS-SD instance (the id
-// without "urn:", as the master's inventory gives it).
+// without "urn:", as the coordinator's inventory gives it).
 func (s *Service) findThing(thing string) (ThingRecord, error) {
 	t, err := s.thing(thing)
 	if errors.Is(err, ErrNotFound) {
@@ -250,7 +250,7 @@ func (s *Service) Apps() ([]AppOut, error) {
 }
 
 // RetireApp is the admin's way to cut an app off: its key goes, its tokens
-// fall. Only a new key registered by the master brings it back.
+// fall. Only a new key registered by the coordinator brings it back.
 func (s *Service) RetireApp(id string) error {
 	res, err := s.store.db.Exec(`UPDATE apps SET kid = '', raw = NULL WHERE id = ? AND kid != ''`, id)
 	if err != nil {

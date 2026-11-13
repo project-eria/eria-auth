@@ -12,13 +12,13 @@ import (
 // TDs it reads, go with its own tokens, one per Thing (claim thing, like the
 // apps' since step 4e): a Thing can't replay it at the others. Its grants
 // cover read only: the rooms of the Thing once adopted, or the Thing itself
-// without a room. Without a Thing: the master's token, no grants (it only
+// without a room. Without a Thing: the coordinator's token, no grants (it only
 // reads the inventory and the app's release). The relay proves its
 // certificate key: a request it carries for an app can't (the app's TLS
 // session goes through the same connection).
 //
 // ponytail: this is the relay part of the app keys (§4.7 step 3), proven by
-// the TLS key the master signed.
+// the TLS key the coordinator signed.
 
 const (
 	domainRelayToken = "eria-relay-token-v1"
@@ -36,7 +36,7 @@ func (s *Service) RelayChallenge(r *http.Request) (string, error) {
 
 // RelayToken checks the relay's signature over challenge ‖ domain and
 // issues its service token for thing (TD id, or DNS-SD instance), "" for the
-// master.
+// coordinator.
 func (s *Service) RelayToken(r *http.Request, challenge string, sig []byte, thing string) (string, error) {
 	key, ok := relayPublicKey(r)
 	if !ok || !s.challenges.Redeem(challenge, key, []byte(challenge+domainRelayToken), sig) {

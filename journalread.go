@@ -9,7 +9,7 @@ import (
 )
 
 // Reading and erasing the journal (AUTH-DESIGN §4.5, step 5e-6): the admin
-// reads it, each reading journaled; whole days are erased by the master's
+// reads it, each reading journaled; whole days are erased by the coordinator's
 // validated order, here and in its copy.
 
 const maxReadSpan = 2 * 86400 // a local day spans two UTC days
@@ -51,12 +51,12 @@ func (s *Service) ReadJournal(by Caller, from, to int64, session string) ([]Entr
 }
 
 // EraseJournal erases whole UTC days up to the order's day, signed by the
-// master once the admin validated it; never today nor a message replayed.
+// coordinator once the admin validated it; never today nor a message replayed.
 func (s *Service) EraseJournal(doc auth.Signed) error {
 	var e auth.JournalErase
 	if err := doc.Open(auth.JournalErasePrefix, s.deploy, &e); err != nil {
-		s.store.record(Entry{Type: "document.refused", Subject: sourceMaster, Object: "erase", Result: "denied", Reason: "signature"})
-		s.alertOnce("signature:"+sourceMaster, "Signature invalide : "+sourceMaster)
+		s.store.record(Entry{Type: "document.refused", Subject: sourceCoordinator, Object: "erase", Result: "denied", Reason: "signature"})
+		s.alertOnce("signature:"+sourceCoordinator, "Signature invalide : "+sourceCoordinator)
 		return ErrDenied
 	}
 	now := s.now()
@@ -82,7 +82,7 @@ func (s *Service) EraseJournal(doc auth.Signed) error {
 	n, _ := res.RowsAffected()
 	s.store.db.Exec(`INSERT INTO state (key, value) VALUES ('journal_erase', ?)
 		ON CONFLICT (key) DO UPDATE SET value = excluded.value`, e.At)
-	s.store.record(Entry{Type: "journal.erased", Subject: sourceMaster, Object: e.Until,
+	s.store.record(Entry{Type: "journal.erased", Subject: sourceCoordinator, Object: e.Until,
 		Detail: fmt.Sprintf("all %t, %d lines", e.All, n), Keep: keepLong})
 	return nil
 }

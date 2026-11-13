@@ -17,8 +17,8 @@ import (
 	zlog "github.com/rs/zerolog/log"
 )
 
-// Copy of the journal on the master's node (AUTH-DESIGN §4.5, step 5e-2):
-// each line sent right after it is written, in order, to the master's
+// Copy of the journal on the coordinator's node (AUTH-DESIGN §4.5, step 5e-2):
+// each line sent right after it is written, in order, to the coordinator's
 // append-only files (one per UTC day and class); once a day, the digests of
 // yesterday's files compared with auth's own lines, a divergence alerted.
 
@@ -29,10 +29,10 @@ const journalBatch = 200
 
 type JournalCopy struct {
 	svc      *Service
-	url      string // master action appendAuthJournal
+	url      string // coordinator action appendAuthJournal
 	client   *http.Client
-	known    bool   // last is the master's last line
-	lastAt   int64  // the master's last line: at…
+	known    bool   // last is the coordinator's last line
+	lastAt   int64  // the coordinator's last line: at…
 	lastID   int64  // …and id
 	compared string // last day compared, YYYY-MM-DD
 }
@@ -47,7 +47,7 @@ func NewJournalCopy(svc *Service, backupURL string, client *http.Client) (*Journ
 	return &JournalCopy{svc: svc, url: u.String(), client: client}, nil
 }
 
-// Run copies after each line written, and every minute while the master
+// Run copies after each line written, and every minute while the coordinator
 // doesn't answer or a day is to compare.
 func (j *JournalCopy) Run(stop <-chan struct{}) {
 	tick := time.NewTicker(time.Minute)
@@ -66,7 +66,7 @@ func (j *JournalCopy) Run(stop <-chan struct{}) {
 	}
 }
 
-// Sync sends the lines the master doesn't have, then compares yesterday.
+// Sync sends the lines the coordinator doesn't have, then compares yesterday.
 func (j *JournalCopy) Sync() error {
 	if !j.known {
 		if _, err := j.send(nil, ""); err != nil {
@@ -75,7 +75,7 @@ func (j *JournalCopy) Sync() error {
 	}
 	for {
 		// ponytail: a line written with a clock stepped back behind the
-		// master's last is never sent; the daily comparison tells.
+		// coordinator's last is never sent; the daily comparison tells.
 		lines, err := j.svc.store.journalWhere(`at > ? OR (at = ? AND id > ?)`, journalBatch,
 			j.lastAt, j.lastAt, j.lastID)
 		if err != nil {
@@ -88,7 +88,7 @@ func (j *JournalCopy) Sync() error {
 			return err
 		}
 		if last := lines[len(lines)-1]; j.lastAt != last.At || j.lastID != last.ID {
-			return fmt.Errorf("master kept up to %d.%d, not %d.%d", j.lastAt, j.lastID, last.At, last.ID)
+			return fmt.Errorf("coordinator kept up to %d.%d, not %d.%d", j.lastAt, j.lastID, last.At, last.ID)
 		}
 	}
 	yesterday := j.svc.now().UTC().AddDate(0, 0, -1).Format(time.DateOnly)
@@ -116,7 +116,7 @@ func (j *JournalCopy) Sync() error {
 }
 
 // send posts lines (and asks for the digests of day), and moves to the
-// master's last line.
+// coordinator's last line.
 func (j *JournalCopy) send(lines []Entry, day string) (map[string]string, error) {
 	text := journalText(lines)
 	h := sha256.Sum256([]byte(text))
@@ -128,7 +128,7 @@ func (j *JournalCopy) send(lines []Entry, day string) (map[string]string, error)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		return nil, fmt.Errorf("master answered %s", resp.Status)
+		return nil, fmt.Errorf("coordinator answered %s", resp.Status)
 	}
 	var out struct {
 		At      int64             `json:"at"`
@@ -142,7 +142,7 @@ func (j *JournalCopy) send(lines []Entry, day string) (map[string]string, error)
 	return out.Digests, nil
 }
 
-// journalText is the lines as JSON lines, as the master keeps them.
+// journalText is the lines as JSON lines, as the coordinator keeps them.
 func journalText(lines []Entry) string {
 	var b strings.Builder
 	for _, e := range lines {
@@ -154,7 +154,7 @@ func journalText(lines []Entry) string {
 }
 
 // dayDigests is the sha256 of auth's lines of a UTC day, per class, as the
-// master's files would hold them; none for a class without line.
+// coordinator's files would hold them; none for a class without line.
 func (s *Store) dayDigests(day string) (map[string]string, error) {
 	d, err := time.Parse(time.DateOnly, day)
 	if err != nil {

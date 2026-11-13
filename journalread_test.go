@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Step 5e-6: the admin reads a period or a session, journaled; the master's
+// Step 5e-6: the admin reads a period or a session, journaled; the coordinator's
 // signed order erases whole days, never today nor twice.
 func TestReadAndEraseJournal(t *testing.T) {
 	h := newHouse(t)

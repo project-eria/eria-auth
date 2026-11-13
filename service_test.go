@@ -419,7 +419,7 @@ func TestPhoneValidator(t *testing.T) {
 	require.Equal(t, 200, h.call("POST", "/v1/admin/session", "", map[string]any{
 		"request": req.ID, "proof": h.proof(pc, domainAdminOpen, req.ID)}, nil))
 
-	// An order to the master, carried to the phone and back.
+	// An order to the coordinator, carried to the phone and back.
 	ch := strings.Repeat("A", 43)
 	assert.Equal(t, 400, h.call("POST", "/v1/orders", admin, OrderIn{Challenge: ch, Verb: "eria-admin-validate-v1", Facts: "{}"}, nil),
 		"never a message that reads as one of auth's proofs")

@@ -25,12 +25,12 @@ func TestBackup(t *testing.T) {
 	identity, _ := age.GenerateX25519Identity()
 
 	var got map[string]any
-	master := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	coordinator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewDecoder(r.Body).Decode(&got)
 	}))
-	defer master.Close()
+	defer coordinator.Close()
 
-	b, err := NewBackup(h.svc.store, h.svc.key, h.svc.kid, master.URL, identity.Recipient().String(), master.Client())
+	b, err := NewBackup(h.svc.store, h.svc.key, h.svc.kid, coordinator.URL, identity.Recipient().String(), coordinator.Client())
 	require.NoError(t, err)
 	require.NoError(t, b.Send())
 
@@ -42,7 +42,7 @@ func TestBackup(t *testing.T) {
 	assert.True(t, ed25519.Verify(pub, append([]byte(BackupPrefix+"1800000000000"), sha256Of(data)...), sig))
 
 	r, err := age.Decrypt(bytes.NewReader(data), identity)
-	require.NoError(t, err, "only the master's age key reads it")
+	require.NoError(t, err, "only the coordinator's age key reads it")
 	plain, _ := io.ReadAll(r)
 	path := filepath.Join(t.TempDir(), "restored.db")
 	os.WriteFile(path, plain, 0o600)

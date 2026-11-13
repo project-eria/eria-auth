@@ -113,7 +113,7 @@ func (s *Store) journalWhere(where string, limit int, args ...any) ([]Entry, err
 	return out, rows.Err()
 }
 
-// purge drops the lines past their class, by whole UTC days (the master's
+// purge drops the lines past their class, by whole UTC days (the coordinator's
 // copy alike): a line goes on the day after its last kept day, with every
 // line of its day.
 func (s *Store) purge() {
@@ -150,17 +150,17 @@ func (s *Service) Started() {
 }
 
 // Sources that hand auth their lines (steps 5e-3, 5e-4); each writes its
-// own types only: order.* for the master, relay.* for eria-ui-server,
+// own types only: order.* for the coordinator, relay.* for eria-ui-server,
 // guard.* for the Things of an app.
 const (
-	sourceMaster = "maitre"
-	sourceRelay  = "eria-ui-server-" // + interieur or exterieur
-	sourceApp    = auth.AppSubject   // + the app's id
+	sourceCoordinator = "coordinateur"
+	sourceRelay       = "eria-ui-server-" // + interieur or exterieur
+	sourceApp         = auth.AppSubject   // + the app's id
 )
 
 func prefixOf(source string) string {
 	switch {
-	case source == sourceMaster:
+	case source == sourceCoordinator:
 		return "order."
 	case strings.HasPrefix(source, sourceApp):
 		return "guard."
@@ -170,7 +170,7 @@ func prefixOf(source string) string {
 
 // ReceiveJournal takes a batch of lines signed by one of keys for source,
 // once: a batch whose seq isn't above the last taken is skipped. The line's
-// time is auth's (the copy on the master goes in auth's order), the
+// time is auth's (the copy on the coordinator goes in auth's order), the
 // source's kept in the detail when they differ by more than a minute.
 func (s *Service) ReceiveJournal(source string, keys []auth.PublicKey, doc auth.Signed) error {
 	var b auth.JournalBatch

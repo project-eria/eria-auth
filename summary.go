@@ -148,7 +148,7 @@ func (s *Service) Summary(day string) (string, error) {
 	list(&b, "Écrans muets", "aucun", s.mutedTerminals())
 	list(&b, "Expirations proches", "aucune", s.expiries())
 
-	// Versions, and the digests of the day (the master's copy compares them).
+	// Versions, and the digests of the day (the coordinator's copy compares them).
 	var revocation int64
 	s.store.db.QueryRow(`SELECT value FROM state WHERE key = 'revocations'`).Scan(&revocation)
 	s.mu.Lock()

@@ -1,4 +1,4 @@
-# ERIA package description (orchestrator catalog, eria-manager DESIGN §12.3)
+# ERIA package description (orchestrator catalog, eria-coordinator DESIGN §12.3)
 name: eria-auth
 title: Service d'authentification
 description: Profils, PIN, terminaux, sessions et jetons ; joint par les applications à travers un relais
@@ -9,9 +9,9 @@ exec:
   args: ["--config-path", "{config}"]
   # One pinned instance (AUTH-DESIGN §4.2): never moved or restarted elsewhere automatically.
   # Before the first start, in a shell on the node, in {data}:
-  #   eria-auth bootstrap   (signing key + one-time code), then eria-manager auth-keyset on the master
-  #   eria-auth csr         (TLS key), then eria-manager tls-sign --role auth and tls-root
-  # ERIA_AUTH_PEPPER comes from eria-manager auth-secrets (its auth-pepper file): the master
+  #   eria-auth bootstrap   (signing key + one-time code), then eria-coordinator auth-keyset on the coordinator
+  #   eria-auth csr         (TLS key), then eria-coordinator tls-sign --role auth and tls-root
+  # ERIA_AUTH_PEPPER comes from eria-coordinator auth-secrets (its auth-pepper file): the coordinator
   # seals it to the app key on the node, never in clear (AUTH-DESIGN §4.2).
   # The files (database, keys, certificates) are in {data}.
   env: ["ERIA_AUTH_DATA={data}"]
@@ -21,9 +21,9 @@ config: |
   location: Europe/Paris
   deployment: eria-maison
   listen: ":8443"
-  # Master action receiving the encrypted backups, and the age key it decrypts them with
-  backupURL: "http://<master>:<port>/storeAuthBackup"
-  backupRecipient: "<age1… from eria-manager auth-secrets>"
+  # Coordinator action receiving the encrypted backups, and the age key it decrypts them with
+  backupURL: "http://<coordinator>:<port>/storeAuthBackup"
+  backupRecipient: "<age1… from eria-coordinator auth-secrets>"
   # ntfy topic of the alerts (optional)
   ntfy: ""
   # First values only, then edited in eria-ui-admin: contexts offered to people,
@@ -36,4 +36,4 @@ config: |
   hide:
     - "urn:eria:app:controler:*"
     - "urn:eria:agent:*"
-    - "urn:eria:manager:1"
+    - "urn:eria:coordinator:1"

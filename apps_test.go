@@ -56,7 +56,7 @@ func TestAppKeys(t *testing.T) {
 	a, aPub, aPriv := edPair()
 	b, bPub, _ := edPair()
 
-	// Only the master registers a key.
+	// Only the coordinator registers a key.
 	assert.Equal(t, 403, register(aPriv, aPub, 1), "signed by the app itself")
 	status, _ := token(a)
 	assert.Equal(t, 403, status, "unknown key")
@@ -84,7 +84,7 @@ func TestAppKeys(t *testing.T) {
 	assert.Equal(t, auth.AppSubject+id, c.Sub)
 	assert.Equal(t, AppOut{ID: id, App: "manager-lights", Node: "rdc", Kid: a.kid, Registered: h.now.Unix(), LastToken: h.now.Unix(), Grants: []string{}}, apps[0])
 	h.now = h.now.Add(time.Second)
-	require.Equal(t, 200, register(deployPriv, aPub, 2), "the master says it again (it restarted)")
+	require.Equal(t, 200, register(deployPriv, aPub, 2), "the coordinator says it again (it restarted)")
 	assert.False(t, h.svc.revoked(c), "the same key: its tokens stay")
 
 	// The app moves: same id, the old key and its tokens fall; an old message replayed changes nothing.
@@ -99,7 +99,7 @@ func TestAppKeys(t *testing.T) {
 	assert.Equal(t, c.Sub, h.claims(tokB).Sub, "the identity outlives the key")
 	assert.False(t, h.svc.revoked(h.claims(tokB)), "the new key's first token stays")
 
-	// The admin cuts it off: no token, no new one until the master registers a key.
+	// The admin cuts it off: no token, no new one until the coordinator registers a key.
 	require.Equal(t, 200, h.call("POST", "/v1/apps/"+id+"/retire", admin, nil, nil))
 	assert.True(t, h.svc.revoked(h.claims(tokB)))
 	status, _ = token(b)
@@ -183,7 +183,7 @@ func TestSignedTDAndStates(t *testing.T) {
 	assert.Empty(t, h.svc.activeStates())
 }
 
-// Step 4a: the grants the master sends with the key go in the service token;
+// Step 4a: the grants the coordinator sends with the key go in the service token;
 // a grant on a confirmable command shortens it to 5 min; a grant removed
 // makes the app's tokens fall.
 func TestAppGrants(t *testing.T) {
@@ -217,7 +217,7 @@ func TestAppGrants(t *testing.T) {
 	assert.ErrorIs(t, register("piscine:*"), ErrInvalid, "outside the grammar")
 	require.NoError(t, register("room:piscine:*", "room:garage:read"))
 	c := token("")
-	assert.Empty(t, c.Grants, "the master's token: no grants")
+	assert.Empty(t, c.Grants, "the coordinator's token: no grants")
 	assert.Empty(t, c.Thing)
 	// Step 4e: the token is for one Thing, with the grants on it only;
 	// the DNS-SD instance (the id without "urn:") names it too.

@@ -61,19 +61,19 @@ func (s *Service) ChannelHandler() http.Handler {
 		}
 		signedDoc(w, r, tok, d.Version, err)
 	})
-	// App keys from the master, and the service proofs of the apps (§1.3).
+	// App keys from the coordinator, and the service proofs of the apps (§1.3).
 	mux.HandleFunc("POST /v1/apps/keys", handle(func(r *http.Request, in auth.Signed) (any, error) {
 		return nil, s.RegisterAppKey(in)
 	}))
-	// The master's registry of admin keys (piste 7), signed by the deployment key.
+	// The coordinator's registry of admin keys (piste 7), signed by the deployment key.
 	mux.HandleFunc("POST /v1/admin/keys", handle(func(r *http.Request, in auth.Signed) (any, error) {
 		return nil, s.ApplyAdminKeys(in)
 	}))
-	// The master's journal lines (§4.5), signed by the deployment key.
+	// The coordinator's journal lines (§4.5), signed by the deployment key.
 	mux.HandleFunc("POST /v1/journal", receiveBatch(func(r *http.Request, doc auth.Signed) error {
-		return s.ReceiveJournal(sourceMaster, s.deploy, doc)
+		return s.ReceiveJournal(sourceCoordinator, s.deploy, doc)
 	}))
-	// Whole days erased (§4.5), by the master's validated order.
+	// Whole days erased (§4.5), by the coordinator's validated order.
 	mux.HandleFunc("POST /v1/journal/erase", receiveBatch(func(r *http.Request, doc auth.Signed) error {
 		return s.EraseJournal(doc)
 	}))
@@ -94,7 +94,7 @@ func (s *Service) ChannelHandler() http.Handler {
 		Kid       string
 		Challenge string
 		Sig       []byte
-		Thing     string // the Thing it is for; "" for the master
+		Thing     string // the Thing it is for; "" for the coordinator
 	}) (any, error) {
 		tok, err := s.ServiceToken(in.Kid, in.Challenge, in.Sig, in.Thing)
 		return map[string]string{"token": tok}, err

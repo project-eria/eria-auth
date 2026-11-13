@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The master's registry makes the admin's phone a validator by its active
+// The coordinator's registry makes the admin's phone a validator by its active
 // bio key, adds a YubiKey, never turns a phone not enrolled into a key of
 // its own, and an older or foreign registry changes nothing.
 func TestAdminKeysRegistry(t *testing.T) {

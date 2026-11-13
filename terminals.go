@@ -445,7 +445,7 @@ type BioPending struct {
 	Since int64  `json:"since"`
 	Print string `json:"print"`
 	Kid   string `json:"kid"`
-	Key   string `json:"key"` // raw, base64url: for the master's admin-key add
+	Key   string `json:"key"` // raw, base64url: for the coordinator's admin-key add
 }
 
 // keyPrint is what a person compares between two screens: 8 hex characters

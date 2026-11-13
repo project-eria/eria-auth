@@ -387,7 +387,7 @@ type Validation struct {
 	Kind    string `json:"kind"` // admin-session, order
 	Origin  string `json:"origin"`
 	Expires int64  `json:"expires"`
-	// An order to the master: the phone signs challenge ‖ verb ‖ facts.
+	// An order to the coordinator: the phone signs challenge ‖ verb ‖ facts.
 	Challenge string `json:"challenge,omitempty"`
 	Verb      string `json:"verb,omitempty"`
 	Facts     string `json:"facts,omitempty"`
@@ -423,10 +423,10 @@ func (s *Service) Validations(p Proof, out bool) ([]Validation, error) {
 	return list, nil
 }
 
-// --- Orders to the master (§3.5) ---
+// --- Orders to the coordinator (§3.5) ---
 
-// pendingOrder is an order the master asked to validate, carried to the
-// admin's phone. auth only carries it: the master checks the signature with
+// pendingOrder is an order the coordinator asked to validate, carried to the
+// admin's phone. auth only carries it: the coordinator checks the signature with
 // its own registry of admin keys, never through auth.
 type pendingOrder struct {
 	Validation
@@ -438,7 +438,7 @@ type pendingOrder struct {
 const maxOrders = 8
 
 var (
-	// The master's challenge (32 bytes, base64url) and its verbs: a message
+	// The coordinator's challenge (32 bytes, base64url) and its verbs: a message
 	// that can never read as one of auth's proofs (challenge ‖ "eria-…").
 	orderChallenge = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 	orderVerb      = regexp.MustCompile(`^[a-z][A-Za-z]{2,40}$`)

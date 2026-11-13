@@ -34,13 +34,13 @@ type AppConfig struct {
 	Deployment string `yaml:"deployment" required:"true"`           // aud of the tokens: id of the house
 	Listen     string `yaml:"listen" default:":8443"`               // tunnel listener, for the relays
 	Channel    string `yaml:"channel" default:":8444"`              // Things channel: plain HTTP, home automation network only
-	Cert       string `yaml:"cert" default:"auth.crt"`              // TLS certificate, role "auth", signed by the master
+	Cert       string `yaml:"cert" default:"auth.crt"`              // TLS certificate, role "auth", signed by the coordinator
 	CertKey    string `yaml:"certKey" default:"auth-tls.key"`       // its private key, made by `eria-auth csr`
-	Roots      string `yaml:"roots" default:"roots.pem"`            // deployment roots (eria-manager tls-root)
+	Roots      string `yaml:"roots" default:"roots.pem"`            // deployment roots (eria-coordinator tls-root)
 	Ntfy       string `yaml:"ntfy"`                                 // ntfy topic URL for the alerts
 	StatesApp  string `yaml:"statesApp" default:"manager-contexts"` // the app that publishes the house states, its name in the deployment
-	// Backups (§4.2): the master's action storeAuthBackup, and the age public
-	// key of its backup key (eria-manager auth-secrets). The journal's copy
+	// Backups (§4.2): the coordinator's action storeAuthBackup, and the age public
+	// key of its backup key (eria-coordinator auth-secrets). The journal's copy
 	// goes to appendAuthJournal next to it (§4.5).
 	BackupURL       string `yaml:"backupURL" required:"true"`
 	BackupRecipient string `yaml:"backupRecipient" required:"true"`
@@ -95,32 +95,32 @@ func main() {
 	if err := svc.CheckClock(); err != nil {
 		zlog.Fatal().Err(err).Msg("[main] Clock behind the last version issued")
 	}
-	// The master is reached with its certificate checked against the
-	// deployment roots (role maitre) once it serves HTTPS (§4.7 step 5d).
+	// The coordinator is reached with its certificate checked against the
+	// deployment roots (role coordinateur) once it serves HTTPS (§4.7 step 5d).
 	rootsPEM, _ := os.ReadFile(config.Roots)
-	master, err := inventory.MasterClient(rootsPEM, 30*time.Second)
+	coordinator, err := inventory.CoordinatorClient(rootsPEM, 30*time.Second)
 	if err != nil {
 		zlog.Fatal().Err(err).Str("file", config.Roots).Msg("[main] Bad deployment roots")
 	}
-	backup, err := NewBackup(store, key, svc.kid, config.BackupURL, config.BackupRecipient, master)
+	backup, err := NewBackup(store, key, svc.kid, config.BackupURL, config.BackupRecipient, coordinator)
 	if err != nil {
 		zlog.Fatal().Err(err).Msg("[main] Bad backupRecipient")
 	}
 	go backup.Run()
 	go svc.WatchThings(nil)
 	go store.PurgeJournal(nil)
-	journalCopy, err := NewJournalCopy(svc, config.BackupURL, master)
+	journalCopy, err := NewJournalCopy(svc, config.BackupURL, coordinator)
 	if err != nil {
 		zlog.Fatal().Err(err).Msg("[main] Bad backupURL")
 	}
 	go journalCopy.Run(nil)
 	svc.Started()
 	backup.Changed() // a first backup at each start
-	zlog.Info().Str("fingerprint", svc.kid).Msg("[main] auth key (compare with eria-manager auth-keyset)")
+	zlog.Info().Str("fingerprint", svc.kid).Msg("[main] auth key (compare with eria-coordinator auth-keyset)")
 
 	cert, err := tls.LoadX509KeyPair(config.Cert, config.CertKey)
 	if err != nil {
-		zlog.Fatal().Err(err).Msg("[main] No TLS certificate: `eria-auth csr`, then eria-manager tls-sign --role auth")
+		zlog.Fatal().Err(err).Msg("[main] No TLS certificate: `eria-auth csr`, then eria-coordinator tls-sign --role auth")
 	}
 	if leaf, err := x509.ParseCertificate(cert.Certificate[0]); err == nil {
 		svc.certExpiry = leaf.NotAfter
@@ -128,7 +128,7 @@ func main() {
 	go svc.SendSummaries(nil)
 	roots := x509.NewCertPool()
 	if data, err := os.ReadFile(config.Roots); err != nil || !roots.AppendCertsFromPEM(data) {
-		zlog.Fatal().Str("file", config.Roots).Msg("[main] No deployment root (eria-manager tls-root)")
+		zlog.Fatal().Str("file", config.Roots).Msg("[main] No deployment root (eria-coordinator tls-root)")
 	}
 	if svc.deploy, err = auth.DeploymentKeys(rootsPEM); err != nil {
 		zlog.Fatal().Err(err).Str("file", config.Roots).Msg("[main] No deployment key in the roots")
@@ -232,7 +232,7 @@ func cmdFingerprint(args []string, out io.Writer) error {
 	return printFingerprint(key, out)
 }
 
-// printFingerprint gives what eria-manager auth-keyset needs: the key, and
+// printFingerprint gives what eria-coordinator auth-keyset needs: the key, and
 // its fingerprint to compare.
 func printFingerprint(key ed25519.PrivateKey, out io.Writer) error {
 	raw := key.Public().(ed25519.PublicKey)
@@ -240,13 +240,13 @@ func printFingerprint(key ed25519.PrivateKey, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(out, "eria-manager auth-keyset --key %s --expect %s\n",
+	_, err = fmt.Fprintf(out, "eria-coordinator auth-keyset --key %s --expect %s\n",
 		base64.RawURLEncoding.EncodeToString(raw), pub.KID())
 	return err
 }
 
 // cmdCSR makes the TLS private key on this node (if absent) and prints its
-// certificate request, for eria-manager tls-sign --role auth. With a signing
+// certificate request, for eria-coordinator tls-sign --role auth. With a signing
 // key here, a last line « csr-sig: <base64url> » signs the request's DER
 // (auth.CSRPrefix): the guided restore ties the CSR to the key the admin
 // compared.

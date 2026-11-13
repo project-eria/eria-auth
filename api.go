@@ -311,7 +311,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/terminals/{id}/bio", admin(func(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, s.RefuseBio(r.PathValue("id")))
 	}))
-	// Orders to the master (§3.5): the admin's computer hands one to the
+	// Orders to the coordinator (§3.5): the admin's computer hands one to the
 	// phone and takes its signature back; the phone signs without a token.
 	mux.HandleFunc("POST /v1/orders", handle(func(r *http.Request, in OrderIn) (any, error) {
 		c, err := s.asAdmin(bearer(r))
@@ -351,7 +351,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/relay/token", handle(func(r *http.Request, in struct {
 		Challenge string
 		Sig       []byte
-		Thing     string // "" for the master
+		Thing     string // "" for the coordinator
 	}) (any, error) {
 		tok, err := s.RelayToken(r, in.Challenge, in.Sig, in.Thing)
 		return map[string]string{"token": tok}, err
@@ -389,7 +389,7 @@ func (s *Service) Handler() http.Handler {
 	}) (any, error) {
 		return nil, s.SetRule(r.PathValue("id"), in.State, in.Key, in.Rule)
 	})))
-	// Apps (§1.3): their keys come from the master; the admin can only cut one off.
+	// Apps (§1.3): their keys come from the coordinator; the admin can only cut one off.
 	mux.HandleFunc("GET /v1/apps", admin(func(w http.ResponseWriter, r *http.Request) {
 		list, err := s.Apps()
 		reply(w, list, err)

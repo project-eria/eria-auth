@@ -55,7 +55,7 @@ type Service struct {
 	notify     func(title string) // ntfy alert, fixed title per type (§4.5)
 	mu         sync.Mutex         // guards badCodes and orders
 	badCodes   []time.Time
-	orders     map[string]*pendingOrder // orders to the master, waiting for the phone
+	orders     map[string]*pendingOrder // orders to the coordinator, waiting for the phone
 	floodAt    time.Time                // last « too many requests » alert, one per 10 min
 	newAt      time.Time                // last « new device » alert, one per 10 min
 	relayToken map[string]int64         // last service token of each eria-ui-server, unix

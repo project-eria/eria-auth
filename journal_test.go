@@ -124,13 +124,13 @@ func TestBadDocuments(t *testing.T) {
 	assert.Equal(t, 1, acks, "a revocation version journaled once per app")
 }
 
-// Step 5e-2: each line copied once to the master, yesterday compared.
+// Step 5e-2: each line copied once to the coordinator, yesterday compared.
 func TestJournalCopy(t *testing.T) {
 	h := newHouse(t)
-	var kept []string // the master's lines, as sent
-	lost := false     // the master keeps the lines, its answer is lost
+	var kept []string // the coordinator's lines, as sent
+	lost := false     // the coordinator keeps the lines, its answer is lost
 	pub := h.svc.key.Public().(ed25519.PublicKey)
-	master := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	coordinator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/appendAuthJournal", r.URL.Path)
 		var in struct{ Lines, Sig, Day string }
 		json.NewDecoder(r.Body).Decode(&in)
@@ -170,8 +170,8 @@ func TestJournalCopy(t *testing.T) {
 		}
 		json.NewEncoder(w).Encode(map[string]any{"at": last.At, "id": last.ID, "digests": digests})
 	}))
-	defer master.Close()
-	jc, err := NewJournalCopy(h.svc, master.URL+"/storeAuthBackup", master.Client())
+	defer coordinator.Close()
+	jc, err := NewJournalCopy(h.svc, coordinator.URL+"/storeAuthBackup", coordinator.Client())
 	require.NoError(t, err)
 
 	h.svc.Started()
@@ -187,7 +187,7 @@ func TestJournalCopy(t *testing.T) {
 	lines, _ := h.svc.store.Journal(0)
 	assert.Equal(t, journalText(lines), strings.Join(kept, ""))
 
-	// The next day, yesterday is compared: the same, then altered on the master.
+	// The next day, yesterday is compared: the same, then altered on the coordinator.
 	h.now = h.now.Add(24 * time.Hour)
 	require.NoError(t, jc.Sync())
 	assert.Empty(t, h.alert)
@@ -198,7 +198,7 @@ func TestJournalCopy(t *testing.T) {
 	assert.Equal(t, "digest", h.last("journal.diverged").Reason)
 }
 
-// Step 5e-3: the master's and the relay's lines, signed, taken once, their
+// Step 5e-3: the coordinator's and the relay's lines, signed, taken once, their
 // own types only.
 func TestJournalSources(t *testing.T) {
 	h := newHouse(t)
@@ -220,7 +220,7 @@ func TestJournalSources(t *testing.T) {
 	assert.Equal(t, 200, post(b, deployPriv))
 	assert.Equal(t, 200, post(b, deployPriv), "sent again: taken once")
 	got := h.last("order.validated")
-	assert.Equal(t, sourceMaster, got.Source)
+	assert.Equal(t, sourceCoordinator, got.Source)
 	assert.Equal(t, keepLong, got.Keep)
 	assert.Equal(t, "type", h.last("document.refused").Reason, "a type of another source")
 	lines, _ := h.svc.store.Journal(0)
@@ -235,7 +235,7 @@ func TestJournalSources(t *testing.T) {
 	// Another key: refused, alerted; a late line keeps its own time in detail.
 	_, forger, _ := ed25519.GenerateKey(rand.Reader)
 	assert.Equal(t, 403, post(auth.JournalBatch{Seq: 11, Lines: []auth.Line{order}}, forger))
-	assert.Contains(t, h.alert, "Signature invalide : maitre")
+	assert.Contains(t, h.alert, "Signature invalide : coordinateur")
 	late := order
 	late.At -= 600
 	assert.Equal(t, 200, post(auth.JournalBatch{Seq: 12, Lines: []auth.Line{late}}, deployPriv))
@@ -251,7 +251,7 @@ func TestJournalSources(t *testing.T) {
 	require.NoError(t, h.svc.ReceiveJournal(sourceRelay+"interieur", []auth.PublicKey{relay}, doc))
 	assert.Equal(t, "eria-ui-server-interieur", h.last("relay.denied").Source)
 	assert.Equal(t, keepShort, h.last("relay.denied").Keep)
-	assert.Equal(t, sourceMaster, h.last("order.validated").Source)
+	assert.Equal(t, sourceCoordinator, h.last("order.validated").Source)
 }
 
 // Step 5e-4: an app's Things, by its key: guard.* only, a confirmation used

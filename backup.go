@@ -18,15 +18,15 @@ import (
 	zlog "github.com/rs/zerolog/log"
 )
 
-// Backup sends an encrypted copy of the whole state to the master after each
+// Backup sends an encrypted copy of the whole state to the coordinator after each
 // change, and once a day as a safeguard (AUTH-DESIGN §4.2). Encrypted with
-// age for the master's backup key: auth can write a backup, never read one.
+// age for the coordinator's backup key: auth can write a backup, never read one.
 // Neither the pepper nor the auth key are in it, nor the journal.
 type Backup struct {
 	store     *Store
 	key       ed25519.PrivateKey
 	kid       string
-	url       string // master action storeAuthBackup
+	url       string // coordinator action storeAuthBackup
 	recipient age.Recipient
 	client    *http.Client
 	changed   chan struct{}
@@ -72,7 +72,7 @@ func (b *Backup) Run() {
 	}
 }
 
-// Send encrypts the current state and posts it to the master.
+// Send encrypts the current state and posts it to the coordinator.
 func (b *Backup) Send() error {
 	plain, err := b.snapshot()
 	if err != nil {
@@ -99,7 +99,7 @@ func (b *Backup) Send() error {
 	}
 	resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("master answered %s", resp.Status)
+		return fmt.Errorf("coordinator answered %s", resp.Status)
 	}
 	zlog.Info().Int64("version", version).Msg("[backup] sent")
 	return nil

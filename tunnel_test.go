@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// pki is a small deployment authority, as eria-manager's.
+// pki is a small deployment authority, as eria-coordinator's.
 type pki struct {
 	root     *x509.Certificate
 	rootKey  ed25519.PrivateKey
@@ -102,7 +102,7 @@ func TestTunnel(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 200, code)
 
-	_, err = enroll(p.client(addr, p.leaf(t, "maitre")))
+	_, err = enroll(p.client(addr, p.leaf(t, "coordinateur")))
 	assert.Error(t, err, "only a relay certificate opens a tunnel")
 
 	other := newPKI(t)
@@ -172,6 +172,6 @@ func TestRelayToken(t *testing.T) {
 	code, _ = token(key, "urn:eria:inconnu:1")
 	assert.Equal(t, 404, code)
 	_, tc = token(key, "")
-	assert.Empty(t, tc.Thing, "the master's token")
+	assert.Empty(t, tc.Thing, "the coordinator's token")
 	assert.Empty(t, tc.Grants)
 }

@@ -7,23 +7,23 @@ import (
 	"github.com/project-eria/go-wot/auth"
 )
 
-// ApplyAdminKeys takes the master's registry of admin keys (revue de
+// ApplyAdminKeys takes the coordinator's registry of admin keys (revue de
 // simplification, piste 7), signed by a deployment key: one registry, the
-// master's, here only applied. A YubiKey becomes a validator key; a phone
+// coordinator's, here only applied. A YubiKey becomes a validator key; a phone
 // whose ACTIVE bio key is the one named becomes a validator phone (a pending
 // bio key is ignored: its activation stays the admin's « has Léa changed
 // Face ID? », G35). It only adds: removing a validator stays a gesture here
-// (block the phone, or unset it) as well as at the master. The bootstrap's
-// YubiKey stays, so a first admin session needs no master (F065).
+// (block the phone, or unset it) as well as at the coordinator. The bootstrap's
+// YubiKey stays, so a first admin session needs no coordinator (F065).
 //
 // An older registry is refused; the same version again is applied again
 // (idempotent), so a phone enrolled after the publication becomes a
-// validator at the master's next one.
+// validator at the coordinator's next one.
 func (s *Service) ApplyAdminKeys(signed auth.Signed) error {
 	var k auth.AdminKeys
 	if err := signed.Open(auth.AdminKeysPrefix, s.deploy, &k); err != nil || k.Version <= 0 {
 		s.store.record(Entry{Type: "document.refused", Object: "admin-keys", Result: "denied", Reason: "signature"})
-		s.alertOnce("signature:master", "Signature invalide : maître")
+		s.alertOnce("signature:coordinator", "Signature invalide : coordinateur")
 		return ErrDenied
 	}
 	var held int64
@@ -53,7 +53,7 @@ func (s *Service) ApplyAdminKeys(signed auth.Signed) error {
 			return err
 		}
 		if n, _ := res.RowsAffected(); n > 0 {
-			s.store.log("terminal.validator", fmt.Sprintf("%s true (master's registry)", pub.KID()))
+			s.store.log("terminal.validator", fmt.Sprintf("%s true (coordinator's registry)", pub.KID()))
 			s.notify("Nouveau téléphone validateur : " + e.Name)
 		}
 		// A key of its own only when the registry says YubiKey: a phone
@@ -65,7 +65,7 @@ func (s *Service) ApplyAdminKeys(signed auth.Signed) error {
 				return err
 			}
 			if n, _ := res.RowsAffected(); n > 0 {
-				s.store.log("validator.key", fmt.Sprintf("%s %s (master's registry)", e.Name, pub.KID()))
+				s.store.log("validator.key", fmt.Sprintf("%s %s (coordinator's registry)", e.Name, pub.KID()))
 				s.notify("Nouvelle clé validatrice : " + e.Name)
 			}
 		}
