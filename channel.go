@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -175,6 +176,11 @@ type SimulateOut struct {
 	// was enough), and the step it would have ended at then.
 	Grant       string `json:"grant,omitempty"`
 	WithoutStep int    `json:"withoutStep,omitempty"`
+	// Past step 5: where the request comes from (local, remote, outside)
+	// and the level the function requires there (0: nobody), for the
+	// admin's explanation of a refusal.
+	Place string `json:"place,omitempty"`
+	Need  int    `json:"need"`
 }
 
 // Simulate runs the decision of the Thing on the token auth would issue
@@ -245,6 +251,18 @@ func (s *Service) Simulate(in SimulateIn) (SimulateOut, error) {
 	}
 	d := decide(tok)
 	out := SimulateOut{Allow: d.Allow, Step: d.Step, Reason: d.Reason}
+	if d.Allow || d.Step >= 7 {
+		// Step 5's locality, as authz.Decide: the table's rule at that place.
+		c, loc := d.Claims, authz.Remote
+		switch {
+		case c.Out != nil && *c.Out:
+			loc = authz.Outside
+		case c.Zone != "" && slices.Contains(th.Zones, c.Zone):
+			loc = authz.Local
+		}
+		fn := authz.Function{Kind: kind, Name: name, Op: authz.Op(op)}
+		out.Place, out.Need = loc.String(), th.Effective[fn.Key()].Levels[loc]
+	}
 	// Allowed with grants: which one? Denied without them, the first
 	// that alone allows it.
 	if c := d.Claims; d.Allow && len(c.Grants) > 0 {

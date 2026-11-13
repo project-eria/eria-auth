@@ -97,7 +97,8 @@ func TestThingTables(t *testing.T) {
 	require.Equal(t, 200, h.call("POST", "/v1/simulate", admin, SimulateIn{Terminal: garage.ID, Thing: id, Key: "property/closed/read"}, &out))
 	assert.True(t, out.Allow, out.Reason)
 	require.Equal(t, 200, h.call("POST", "/v1/simulate", admin, SimulateIn{Terminal: entrance.ID, Thing: id, Key: "property/closed/read"}, &out))
-	assert.Equal(t, SimulateOut{Step: 7, Reason: out.Reason, Level: 9}, out)
+	assert.Equal(t, SimulateOut{Step: 7, Reason: out.Reason, Level: 9, Place: "remote", Need: out.Need}, out)
+	assert.Less(t, out.Need, 9, "the level the rule asks in the house")
 	require.Equal(t, 200, h.call("POST", "/v1/simulate", admin, SimulateIn{Terminal: garage.ID, Thing: id, Key: "property/light/read"}, &out))
 	assert.Equal(t, 7, out.Step, "unclassified")
 
