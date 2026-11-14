@@ -92,6 +92,9 @@ func main() {
 	if err := svc.SeedConfig(config.Hide); err != nil {
 		zlog.Fatal().Err(err).Msg("[main] Can't store the first settings")
 	}
+	if err := svc.RenameCoordinator(); err != nil {
+		zlog.Fatal().Err(err).Msg("[main] Can't rename the master's hidden pattern")
+	}
 	if err := svc.SeedLevels(config.Levels); err != nil {
 		zlog.Fatal().Err(err).Msg("[main] Can't store the first level names")
 	}

@@ -498,6 +498,21 @@ func (s *Service) SeedLevels(levels []Level) error {
 	return err
 }
 
+// RenameCoordinator moves a hidden pattern of the master to the coordinator
+// it became (2026-11-13: urn:eria:manager:1 → urn:eria:coordinator:1), once.
+// ponytail: one-off migration, remove once every house runs past it.
+func (s *Service) RenameCoordinator() error {
+	res, err := s.store.db.Exec(`UPDATE OR IGNORE hidden SET pattern = 'urn:eria:coordinator:1' WHERE pattern = 'urn:eria:manager:1'`)
+	if err != nil {
+		return err
+	}
+	s.store.db.Exec(`DELETE FROM hidden WHERE pattern = 'urn:eria:manager:1'`) // the new one was already there
+	if n, _ := res.RowsAffected(); n > 0 {
+		s.configChanged("config.hidden", "urn:eria:coordinator:1")
+	}
+	return nil
+}
+
 // SeedConfig copies the first hidden patterns of the config file, once (the
 // contexts come from manager-contexts' TD).
 func (s *Service) SeedConfig(hidden []string) error {

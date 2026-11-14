@@ -28,3 +28,16 @@ func TestLevelNames(t *testing.T) {
 	c, _ = h.svc.Config()
 	assert.Len(t, c.Levels, 2, "a refused list changes nothing")
 }
+
+// The master's hidden pattern follows its rename to the coordinator.
+func TestRenameCoordinator(t *testing.T) {
+	h := newHouse(t)
+	require.NoError(t, h.svc.SetHidden([]string{"urn:eria:agent:*", "urn:eria:manager:1"}))
+	require.NoError(t, h.svc.RenameCoordinator())
+	c, _ := h.svc.Config()
+	assert.Equal(t, []string{"urn:eria:agent:*", "urn:eria:coordinator:1"}, c.Hidden)
+	require.NoError(t, h.svc.SetHidden([]string{"urn:eria:coordinator:1", "urn:eria:manager:1"}))
+	require.NoError(t, h.svc.RenameCoordinator())
+	c, _ = h.svc.Config()
+	assert.Equal(t, []string{"urn:eria:coordinator:1"}, c.Hidden, "both: the old one goes")
+}
