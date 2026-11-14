@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	zlog "github.com/rs/zerolog/log"
 	"regexp"
 	"slices"
 	"strings"
@@ -138,7 +139,70 @@ func (s *Service) ReceiveSignedTD(body []byte) error {
 	if err := json.Unmarshal(body, &td); err != nil {
 		return ErrInvalid
 	}
+	if list, ok := contextsOfTD(td); ok && s.fromStatesApp(app, td.ID) {
+		s.takeContexts(list)
+	}
 	return s.ReceiveTD(td, app)
+}
+
+// statesThing is manager-contexts' Thing, whose TD lists the contexts.
+const statesThing = "urn:eria:manager:context"
+
+// contextsOfTD reads the contexts manager-contexts offers to people, the one
+// source of the list: the choices (const, title) of its property "chosen",
+// in their order.
+func contextsOfTD(td TDIn) ([]Context, bool) {
+	raw, ok := td.Properties["chosen"]
+	if !ok {
+		return nil, false
+	}
+	var p struct {
+		Items struct {
+			OneOf []struct {
+				Const string `json:"const"`
+				Title string `json:"title"`
+			} `json:"oneOf"`
+		} `json:"items"`
+	}
+	if json.Unmarshal(raw, &p) != nil {
+		return nil, false
+	}
+	list := []Context{}
+	for _, c := range p.Items.OneOf {
+		if c.Const == "" {
+			continue
+		}
+		label := c.Title
+		if label == "" {
+			label = c.Const
+		}
+		list = append(list, Context{ID: c.Const, Label: label})
+	}
+	return list, true
+}
+
+// fromStatesApp: a TD signed by the states app (manager-contexts), or its
+// Thing's plain TD while that app has no key here, as for its states.
+func (s *Service) fromStatesApp(app, thing string) bool {
+	var name string
+	if app != "" {
+		s.store.db.QueryRow(`SELECT name FROM apps WHERE id = ?`, app).Scan(&name)
+		return name == s.statesApp
+	}
+	var n int
+	s.store.db.QueryRow(`SELECT count(*) FROM apps WHERE name = ? AND kid != ''`, s.statesApp).Scan(&n)
+	return n == 0 && thing == statesThing
+}
+
+// takeContexts replaces the contexts when manager-contexts' list changed.
+func (s *Service) takeContexts(list []Context) {
+	c, err := s.Config()
+	if err == nil && slices.Equal(c.Contexts, list) {
+		return
+	}
+	if err := s.SetContexts(list); err != nil {
+		zlog.Warn().Err(err).Msg("[things] contexts of manager-contexts not taken")
+	}
 }
 
 // ReceiveTD records the TD of a Thing. The first app to sign it owns the

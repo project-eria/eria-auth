@@ -181,6 +181,22 @@ func TestSignedTDAndStates(t *testing.T) {
 	assert.Equal(t, 403, h.call("PUT", "/v1/states", "", signed(contexts, auth.StatesPrefix, auth.States{Version: 1}), nil), "replayed")
 	assert.Equal(t, 200, h.call("PUT", "/v1/states", "", signed(contexts, auth.StatesPrefix, auth.States{Version: 2}), nil))
 	assert.Empty(t, h.svc.activeStates())
+
+	// The contexts come from manager-contexts' TD only: the choices of chosen.
+	chosen := func(id string) map[string]any {
+		return map[string]any{"id": id, "title": "Context", "properties": map[string]any{"chosen": map[string]any{
+			"type": "array", "items": map[string]any{"type": "string", "oneOf": []any{
+				map[string]any{"const": "away", "title": "Absents"}, map[string]any{"const": "canicule"}}}}}}
+	}
+	pool := newApp("manager-pool")
+	require.Equal(t, 200, h.call("POST", "/v1/things/td", "", signed(pool, auth.TDPrefix, chosen("urn:eria:pool:1")), nil))
+	c, _ := h.svc.Config()
+	assert.Equal(t, []Context{{ID: "away", Label: "Absent"}}, c.Contexts, "another app's choices are no contexts")
+	require.Equal(t, 200, h.call("POST", "/v1/things/td", "", signed(contexts, auth.TDPrefix, chosen(statesThing)), nil))
+	c, _ = h.svc.Config()
+	assert.Equal(t, []Context{{ID: "away", Label: "Absents"}, {ID: "canicule", Label: "canicule"}}, c.Contexts)
+	require.Equal(t, 200, h.call("PUT", "/v1/states", "", signed(contexts, auth.StatesPrefix, auth.States{States: []string{"canicule"}, Version: 3}), nil))
+	assert.Equal(t, []string{"canicule"}, h.svc.activeStates(), "a context of the list is a state")
 }
 
 // Step 4a: the grants the coordinator sends with the key go in the service token;

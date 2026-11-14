@@ -45,9 +45,8 @@ type AppConfig struct {
 	BackupURL       string `yaml:"backupURL" required:"true"`
 	BackupRecipient string `yaml:"backupRecipient" required:"true"`
 	// First values only, copied at the first start, then edited by the admin.
-	Contexts []Context `yaml:"contexts,omitempty"` // contexts offered to people, in display order
-	Hide     []string  `yaml:"hide,omitempty"`     // glob patterns on TD ids of the Things never shown
-	Levels   []Level   `yaml:"levels,omitempty"`   // names of the levels 1 to 9 (default: AUTH-DESIGN §2.1)
+	Hide   []string `yaml:"hide,omitempty"`   // glob patterns on TD ids of the Things never shown
+	Levels []Level  `yaml:"levels,omitempty"` // names of the levels 1 to 9 (default: AUTH-DESIGN §2.1)
 }
 
 var config AppConfig
@@ -90,7 +89,7 @@ func main() {
 	svc := NewService(store, pepper, key, config.Deployment)
 	svc.notify = ntfy(config.Ntfy)
 	svc.statesApp = config.StatesApp
-	if err := svc.SeedConfig(config.Contexts, config.Hide); err != nil {
+	if err := svc.SeedConfig(config.Hide); err != nil {
 		zlog.Fatal().Err(err).Msg("[main] Can't store the first settings")
 	}
 	if err := svc.SeedLevels(config.Levels); err != nil {

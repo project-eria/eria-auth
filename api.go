@@ -277,9 +277,6 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("PUT /v1/config/home-page", pageEditor(handle(func(r *http.Request, in struct{ Page string }) (any, error) {
 		return nil, s.SetHomePage(in.Page)
 	})))
-	mux.HandleFunc("PUT /v1/config/contexts", admin(handle(func(r *http.Request, in []Context) (any, error) {
-		return nil, s.SetContexts(in)
-	})))
 	mux.HandleFunc("PUT /v1/config/levels", admin(handle(func(r *http.Request, in []Level) (any, error) {
 		return nil, s.SetLevels(in)
 	})))

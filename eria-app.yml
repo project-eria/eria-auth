@@ -26,13 +26,8 @@ config: |
   backupRecipient: "<age1… from eria-coordinator auth-secrets>"
   # ntfy topic of the alerts (optional)
   ntfy: ""
-  # First values only, then edited in eria-ui-admin: contexts offered to people,
-  # and the Things never shown (glob on TD id)
-  contexts:
-    - id: away
-      label: Absent
-    - id: guests
-      label: Invités
+  # First values only, then edited in eria-ui-admin: the Things never shown (glob
+  # on TD id). The contexts come from manager-contexts' TD.
   hide:
     - "urn:eria:app:controler:*"
     - "urn:eria:agent:*"

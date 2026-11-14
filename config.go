@@ -341,7 +341,8 @@ func (s *Service) SetHomePage(id string) error {
 	return nil
 }
 
-// SetContexts replaces the list, in display order.
+// SetContexts replaces the list, in display order: manager-contexts' (its
+// TD, contextsOfTD), never edited here.
 func (s *Service) SetContexts(list []Context) error {
 	seen := map[string]bool{}
 	for _, c := range list {
@@ -497,16 +498,13 @@ func (s *Service) SeedLevels(levels []Level) error {
 	return err
 }
 
-// SeedConfig copies the first contexts and hidden patterns of the config
-// file, once.
-func (s *Service) SeedConfig(contexts []Context, hidden []string) error {
+// SeedConfig copies the first hidden patterns of the config file, once (the
+// contexts come from manager-contexts' TD).
+func (s *Service) SeedConfig(hidden []string) error {
 	var n int
 	s.store.db.QueryRow(`SELECT count(*) FROM options WHERE key = 'seeded'`).Scan(&n)
 	if n > 0 {
 		return nil
-	}
-	if err := s.SetContexts(contexts); err != nil {
-		return err
 	}
 	if err := s.SetHidden(hidden); err != nil {
 		return err
