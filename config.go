@@ -278,13 +278,14 @@ type InterfaceConfig struct {
 	Pages     []Page           `json:"pages"`
 	HomePage  string           `json:"homePage"`
 	Contexts  []Context        `json:"contexts"`
+	Levels    []Level          `json:"levels"`
 	Hidden    []string         `json:"hidden"`
 	Manual    []ManualThing    `json:"manual"`
 	Terminals []TerminalScreen `json:"terminals"`
 }
 
 func (s *Service) Config() (InterfaceConfig, error) {
-	c := InterfaceConfig{Version: s.configVersion(), Contexts: []Context{}, Hidden: []string{}, Manual: []ManualThing{},
+	c := InterfaceConfig{Version: s.configVersion(), Contexts: []Context{}, Levels: []Level{}, Hidden: []string{}, Manual: []ManualThing{},
 		Terminals: []TerminalScreen{}}
 	var err error
 	if c.Pages, err = s.pages(); err != nil {
@@ -307,6 +308,11 @@ func (s *Service) Config() (InterfaceConfig, error) {
 			var x Context
 			r.Scan(&x.ID, &x.Label)
 			c.Contexts = append(c.Contexts, x)
+		}),
+		query(`SELECT level, name FROM levels ORDER BY level`, func(r *sql.Rows) {
+			var l Level
+			r.Scan(&l.Level, &l.Name)
+			c.Levels = append(c.Levels, l)
 		}),
 		query(`SELECT pattern FROM hidden ORDER BY pattern`, func(r *sql.Rows) {
 			var p string
@@ -433,6 +439,62 @@ func (s *Service) ReportScreen(term, detected string) error {
 	s.store.db.Exec(`UPDATE terminals SET detected_screen = ? WHERE id = ?`, detected, term)
 	s.configChanged("terminal.detected", term)
 	return nil
+}
+
+// Level names a level for the interfaces (AUTH-DESIGN §2.4): display only,
+// the tokens and the rules carry the number. Level 0 is always the admin.
+type Level struct {
+	Level int    `json:"level" yaml:"level"`
+	Name  string `json:"name" yaml:"name"`
+}
+
+// defaultLevels are AUTH-DESIGN §2.4's meanings, for a config without levels.
+var defaultLevels = []Level{{1, "Parents"}, {2, "Enfants"}, {3, "Amis"}, {4, "Prestataires"}, {9, "Invité"}}
+
+// SetLevels replaces the names of the levels 1 to 9; a level left out has none.
+func (s *Service) SetLevels(list []Level) error {
+	seen := map[int]bool{}
+	for i, l := range list {
+		list[i].Name = strings.TrimSpace(l.Name)
+		if l.Level < 1 || l.Level > 9 || seen[l.Level] || list[i].Name == "" || len([]rune(list[i].Name)) > 32 {
+			return Invalid("each level 1 to 9 at most once, with a name of 1 to 32 characters")
+		}
+		seen[l.Level] = true
+	}
+	tx, err := s.store.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	tx.Exec(`DELETE FROM levels`)
+	for _, l := range list {
+		if _, err := tx.Exec(`INSERT INTO levels (level, name) VALUES (?, ?)`, l.Level, l.Name); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.configChanged("config.levels", "")
+	return nil
+}
+
+// SeedLevels copies the first level names (the config's, else the defaults),
+// once: a house started before the names gets them at its first update.
+func (s *Service) SeedLevels(levels []Level) error {
+	var n int
+	s.store.db.QueryRow(`SELECT count(*) FROM options WHERE key = 'levels_seeded'`).Scan(&n)
+	if n > 0 {
+		return nil
+	}
+	if len(levels) == 0 {
+		levels = defaultLevels
+	}
+	if err := s.SetLevels(append([]Level(nil), levels...)); err != nil {
+		return err
+	}
+	_, err := s.store.db.Exec(`INSERT INTO options (key, value) VALUES ('levels_seeded', '1')`)
+	return err
 }
 
 // SeedConfig copies the first contexts and hidden patterns of the config

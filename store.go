@@ -90,6 +90,10 @@ func OpenStore(path string) (*Store, error) {
 			subject TEXT PRIMARY KEY, -- term:<id>, sub:<profile>, sub:app:<id>
 			before  INTEGER NOT NULL  -- tokens issued before this time fall
 		);
+		CREATE TABLE IF NOT EXISTS levels (
+			level INTEGER PRIMARY KEY CHECK (level BETWEEN 1 AND 9),
+			name  TEXT NOT NULL
+		);
 		CREATE TABLE IF NOT EXISTS state (
 			key   TEXT PRIMARY KEY,
 			value INTEGER NOT NULL

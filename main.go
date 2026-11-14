@@ -47,6 +47,7 @@ type AppConfig struct {
 	// First values only, copied at the first start, then edited by the admin.
 	Contexts []Context `yaml:"contexts,omitempty"` // contexts offered to people, in display order
 	Hide     []string  `yaml:"hide,omitempty"`     // glob patterns on TD ids of the Things never shown
+	Levels   []Level   `yaml:"levels,omitempty"`   // names of the levels 1 to 9 (default: AUTH-DESIGN §2.4)
 }
 
 var config AppConfig
@@ -91,6 +92,9 @@ func main() {
 	svc.statesApp = config.StatesApp
 	if err := svc.SeedConfig(config.Contexts, config.Hide); err != nil {
 		zlog.Fatal().Err(err).Msg("[main] Can't store the first settings")
+	}
+	if err := svc.SeedLevels(config.Levels); err != nil {
+		zlog.Fatal().Err(err).Msg("[main] Can't store the first level names")
 	}
 	if err := svc.CheckClock(); err != nil {
 		zlog.Fatal().Err(err).Msg("[main] Clock behind the last version issued")

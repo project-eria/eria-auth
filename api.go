@@ -280,6 +280,9 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("PUT /v1/config/contexts", admin(handle(func(r *http.Request, in []Context) (any, error) {
 		return nil, s.SetContexts(in)
 	})))
+	mux.HandleFunc("PUT /v1/config/levels", admin(handle(func(r *http.Request, in []Level) (any, error) {
+		return nil, s.SetLevels(in)
+	})))
 	mux.HandleFunc("PUT /v1/config/hidden", admin(handle(func(r *http.Request, in []string) (any, error) {
 		return nil, s.SetHidden(in)
 	})))
