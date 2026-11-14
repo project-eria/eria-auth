@@ -139,10 +139,14 @@ func (s *Service) ReceiveSignedTD(body []byte) error {
 	if err := json.Unmarshal(body, &td); err != nil {
 		return ErrInvalid
 	}
-	if list, ok := contextsOfTD(td); ok && s.fromStatesApp(app, td.ID) {
+	if err := s.ReceiveTD(td, app); err != nil {
+		return err
+	}
+	// Only from a TD taken above, and only manager-contexts' Thing.
+	if list, ok := contextsOfTD(td); ok && td.ID == statesThing && s.fromStatesApp(app) {
 		s.takeContexts(list)
 	}
-	return s.ReceiveTD(td, app)
+	return nil
 }
 
 // statesThing is manager-contexts' Thing, whose TD lists the contexts.
@@ -181,9 +185,9 @@ func contextsOfTD(td TDIn) ([]Context, bool) {
 	return list, true
 }
 
-// fromStatesApp: a TD signed by the states app (manager-contexts), or its
-// Thing's plain TD while that app has no key here, as for its states.
-func (s *Service) fromStatesApp(app, thing string) bool {
+// fromStatesApp: a TD signed by the states app (manager-contexts), or a
+// plain TD while that app has no key here, as for its states.
+func (s *Service) fromStatesApp(app string) bool {
 	var name string
 	if app != "" {
 		s.store.db.QueryRow(`SELECT name FROM apps WHERE id = ?`, app).Scan(&name)
@@ -191,7 +195,7 @@ func (s *Service) fromStatesApp(app, thing string) bool {
 	}
 	var n int
 	s.store.db.QueryRow(`SELECT count(*) FROM apps WHERE name = ? AND kid != ''`, s.statesApp).Scan(&n)
-	return n == 0 && thing == statesThing
+	return n == 0
 }
 
 // takeContexts replaces the contexts when manager-contexts' list changed.
