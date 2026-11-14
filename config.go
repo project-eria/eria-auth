@@ -441,14 +441,14 @@ func (s *Service) ReportScreen(term, detected string) error {
 	return nil
 }
 
-// Level names a level for the interfaces (AUTH-DESIGN §2.4): display only,
+// Level names a level for the interfaces (AUTH-DESIGN §2.1): display only,
 // the tokens and the rules carry the number. Level 0 is always the admin.
 type Level struct {
 	Level int    `json:"level" yaml:"level"`
 	Name  string `json:"name" yaml:"name"`
 }
 
-// defaultLevels are AUTH-DESIGN §2.4's meanings, for a config without levels.
+// defaultLevels are AUTH-DESIGN §2.1's meanings, for a config without levels.
 var defaultLevels = []Level{{1, "Parents"}, {2, "Enfants"}, {3, "Amis"}, {4, "Prestataires"}, {9, "Invité"}}
 
 // SetLevels replaces the names of the levels 1 to 9; a level left out has none.

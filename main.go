@@ -47,7 +47,7 @@ type AppConfig struct {
 	// First values only, copied at the first start, then edited by the admin.
 	Contexts []Context `yaml:"contexts,omitempty"` // contexts offered to people, in display order
 	Hide     []string  `yaml:"hide,omitempty"`     // glob patterns on TD ids of the Things never shown
-	Levels   []Level   `yaml:"levels,omitempty"`   // names of the levels 1 to 9 (default: AUTH-DESIGN §2.4)
+	Levels   []Level   `yaml:"levels,omitempty"`   // names of the levels 1 to 9 (default: AUTH-DESIGN §2.1)
 }
 
 var config AppConfig
