@@ -107,7 +107,10 @@ func (s *Service) ChannelHandler() http.Handler {
 		}
 		reply(w, nil, s.ReceiveStates(body))
 	})
-	return limit(mux, 20, 50)
+	// A guard's round is about 2 requests per Thing, sent back to back (TD
+	// until it has a table, table, then revocation and ack): the burst holds
+	// a gateway of ~100 Things plus a few apps starting together.
+	return limit(mux, 20, 500)
 }
 
 // signedDoc answers a signed document, or 304 when the Thing holds this
