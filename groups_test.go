@@ -87,3 +87,45 @@ func TestGroupRuleChecked(t *testing.T) {
 	assert.Error(t, h.svc.SetGroupRule(td.ID, "cmds", &Rule{Levels: [3]int{9, 9, 9}}), "a command needs confirm_when")
 	require.NoError(t, h.svc.SetGroupRule(td.ID, "cmds", &Rule{Levels: [3]int{1, 1, 0}, Confirm: "never"}))
 }
+
+// The admin's choices follow the TD: a function that left and came back is
+// new again; a group gone and back has no stale rule.
+func TestGroupsFollowTheTD(t *testing.T) {
+	h := newHouse(t)
+	id := "urn:eria:service:astral:1"
+	sunset := "property/today/sunset/read"
+	group := func() GroupView {
+		th, err := h.svc.thing(id)
+		require.NoError(t, err)
+		for _, g := range th.Groups {
+			if g.ID == "today" {
+				return g
+			}
+		}
+		return GroupView{}
+	}
+	require.NoError(t, h.svc.ReceiveTD(astralTD("today/sunrise", "today/sunset"), ""))
+	require.NoError(t, h.svc.AdoptThing(id))
+	require.NoError(t, h.svc.SetGroupRule(id, "today", &Rule{Levels: [3]int{9, 9, 9}}))
+
+	// sunset leaves the group (still in the TD), is set alone, comes back: pending.
+	td := astralTD("today/sunrise", "today/sunset")
+	td.Groups[0].Functions = []string{"property/today/sunrise/read"}
+	td.Groups = td.Groups[:1]
+	require.NoError(t, h.svc.ReceiveTD(td, ""))
+	require.NoError(t, h.svc.SetRule(id, "", sunset, &Rule{Levels: [3]int{9, 9, 1}}))
+	require.NoError(t, h.svc.ReceiveTD(astralTD("today/sunrise", "today/sunset"), ""))
+	assert.Equal(t, []string{sunset}, group().Pending)
+
+	// The group gone, then back: no row left, shown from its members' rules.
+	td = astralTD("today/sunrise", "today/sunset")
+	td.Groups = nil
+	require.NoError(t, h.svc.ReceiveTD(td, ""))
+	rows, err := h.svc.groupRows(id)
+	require.NoError(t, err)
+	assert.Empty(t, rows)
+	require.NoError(t, h.svc.ReceiveTD(astralTD("today/sunrise", "today/sunset"), ""))
+	g := group()
+	assert.True(t, g.Individual, "its members differ: 9·9·9 and 9·9·1")
+	assert.Empty(t, g.Pending)
+}

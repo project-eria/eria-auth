@@ -85,6 +85,36 @@ func (td TDIn) groups(funcs []string) []Group {
 	return out
 }
 
+// pruneGroups keeps the admin's group choices in step with the last TD: a
+// group gone loses its row, a function that left a group leaves its lists.
+// Back later, it is new (pending) again, never silently a member.
+func (s *Service) pruneGroups(id string, groups []Group) error {
+	rows, err := s.groupRows(id)
+	if err != nil {
+		return err
+	}
+	for gid, row := range rows {
+		i := slices.IndexFunc(groups, func(g Group) bool { return g.ID == gid })
+		if i < 0 {
+			if _, err := s.store.db.Exec(`DELETE FROM group_rules WHERE thing = ? AND grp = ?`, id, gid); err != nil {
+				return err
+			}
+			continue
+		}
+		gone := func(key string) bool { return !slices.Contains(groups[i].Functions, key) }
+		members := slices.DeleteFunc(slices.Clone(row.members), gone)
+		declined := slices.DeleteFunc(slices.Clone(row.declined), gone)
+		if len(members) == len(row.members) && len(declined) == len(row.declined) {
+			continue
+		}
+		if _, err := s.store.db.Exec(`UPDATE group_rules SET members = ?, declined = ? WHERE thing = ? AND grp = ?`,
+			jsonText(members), jsonText(declined), id, gid); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // groupRow is a group's row in group_rules.
 type groupRow struct {
 	individual        bool

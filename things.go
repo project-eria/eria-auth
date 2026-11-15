@@ -257,6 +257,9 @@ func (s *Service) ReceiveTD(td TDIn, app string) error {
 	if err != nil {
 		return err
 	}
+	if err := s.pruneGroups(td.ID, groups); err != nil {
+		return err
+	}
 	if old.App == "" && app != "" {
 		s.store.log("thing.app", td.ID+" signed by app "+app)
 	}
