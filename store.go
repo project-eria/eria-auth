@@ -166,7 +166,7 @@ func OpenStore(path string) (*Store, error) {
 	// Databases made before the column: the error once it exists is expected.
 	db.Exec(`ALTER TABLE terminals ADD COLUMN device TEXT NOT NULL DEFAULT ''`)
 	db.Exec(`ALTER TABLE terminals ADD COLUMN validator INTEGER NOT NULL DEFAULT 0`)
-	db.Exec(`ALTER TABLE terminals ADD COLUMN profile_expires INTEGER NOT NULL DEFAULT 0`) // an iPhone's profile (step 5h)
+	db.Exec(`ALTER TABLE terminals ADD COLUMN profile_expires INTEGER NOT NULL DEFAULT 0`)   // an iPhone's profile (step 5h)
 	db.Exec(`ALTER TABLE keys ADD COLUMN since INTEGER NOT NULL DEFAULT 0`)                  // a pending bio key: when it came
 	db.Exec(`ALTER TABLE things ADD COLUMN app TEXT NOT NULL DEFAULT ''`)                    // id of the app that signs its TD (step 3d)
 	db.Exec(`ALTER TABLE apps ADD COLUMN grants TEXT NOT NULL DEFAULT '[]'`)                 // accepted by the admin (step 4)
@@ -175,6 +175,21 @@ func OpenStore(path string) (*Store, error) {
 		db.Exec(`ALTER TABLE journal ADD COLUMN ` + col + ` TEXT NOT NULL DEFAULT ''`)
 	}
 	db.Exec(`ALTER TABLE journal ADD COLUMN keep INTEGER NOT NULL DEFAULT 365`)
+	db.Exec(`ALTER TABLE things ADD COLUMN groups TEXT NOT NULL DEFAULT '[]'`) // eria:groups of the last TD
+	// A group's rule set by the admin (§2.4, groups): its members got it;
+	// the others of the group wait (pending) unless declined.
+	db.Exec(`CREATE TABLE IF NOT EXISTS group_rules (
+		thing      TEXT NOT NULL,
+		grp        TEXT NOT NULL,
+		individual INTEGER NOT NULL DEFAULT 0,
+		l0         INTEGER NOT NULL DEFAULT 0,
+		l1         INTEGER NOT NULL DEFAULT 0,
+		l2         INTEGER NOT NULL DEFAULT 0,
+		confirm    TEXT NOT NULL DEFAULT '',
+		members    TEXT NOT NULL DEFAULT '[]',
+		declined   TEXT NOT NULL DEFAULT '[]',
+		PRIMARY KEY (thing, grp)
+	)`)
 	st := &Store{db: db, now: time.Now, changed: func() {}, written: make(chan struct{}, 1)}
 	if err := st.migrateConfig(); err != nil {
 		return nil, err

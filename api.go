@@ -389,6 +389,17 @@ func (s *Service) Handler() http.Handler {
 	}) (any, error) {
 		return nil, s.SetRule(r.PathValue("id"), in.State, in.Key, in.Rule)
 	})))
+	// Groups of functions (§2.4): a group's rule (null: function by function),
+	// and a function new in a group set, accepted or declined.
+	mux.HandleFunc("PUT /v1/things/{id}/groups/{group}", admin(handle(func(r *http.Request, in struct{ Rule *Rule }) (any, error) {
+		return nil, s.SetGroupRule(r.PathValue("id"), r.PathValue("group"), in.Rule)
+	})))
+	mux.HandleFunc("POST /v1/things/{id}/groups/{group}/pending", admin(handle(func(r *http.Request, in struct {
+		Key    string
+		Accept bool
+	}) (any, error) {
+		return nil, s.SettlePending(r.PathValue("id"), r.PathValue("group"), in.Key, in.Accept)
+	})))
 	// Apps (§1.3): their keys come from the coordinator; the admin can only cut one off.
 	mux.HandleFunc("GET /v1/apps", admin(func(w http.ResponseWriter, r *http.Request) {
 		list, err := s.Apps()

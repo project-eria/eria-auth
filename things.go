@@ -42,6 +42,7 @@ type ThingRecord struct {
 	Defaults  map[string]Rule   `json:"defaults"`         // from the adopted capabilities
 	Effective auth.Table        `json:"effective"`        // what the Thing gets now
 	States    map[string]States `json:"states,omitempty"` // overrides, by state then key
+	Groups    []GroupView       `json:"groups"`           // eria:groups of the last TD, with the admin's choices
 }
 
 // Rule is a requirement as stored: levels local, remote, outside (0 = None)
@@ -66,6 +67,7 @@ type TDIn struct {
 	Properties map[string]json.RawMessage `json:"properties"`
 	Actions    map[string]json.RawMessage `json:"actions"`
 	Events     map[string]json.RawMessage `json:"events"`
+	Groups     []Group                    `json:"eria:groups"`
 }
 
 // functions lists the keys of a TD's functions (§2.4): a property is read,
@@ -226,11 +228,12 @@ func (s *Service) ReceiveTD(td TDIn, app string) error {
 		return err
 	}
 	types := td.types()
+	groups := td.groups(funcs)
 	old, err := s.thing(td.ID)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		_, err = s.store.db.Exec(`INSERT INTO things (id, title, seen_types, functions, seen, app) VALUES (?, ?, ?, ?, ?, ?)`,
-			td.ID, td.Title, jsonText(types), jsonText(funcs), s.now().Unix(), app)
+		_, err = s.store.db.Exec(`INSERT INTO things (id, title, seen_types, functions, groups, seen, app) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			td.ID, td.Title, jsonText(types), jsonText(funcs), jsonText(groups), s.now().Unix(), app)
 		if err == nil {
 			s.store.log("thing.new", td.ID)
 			s.mu.Lock()
@@ -249,8 +252,8 @@ func (s *Service) ReceiveTD(td TDIn, app string) error {
 	case old.App != "" && old.App != app:
 		return ErrDenied // another app, or a plain TD for a Thing that has one
 	}
-	_, err = s.store.db.Exec(`UPDATE things SET title = ?, seen_types = ?, functions = ?, seen = ?, app = ? WHERE id = ?`,
-		td.Title, jsonText(types), jsonText(funcs), s.now().Unix(), app, td.ID)
+	_, err = s.store.db.Exec(`UPDATE things SET title = ?, seen_types = ?, functions = ?, groups = ?, seen = ?, app = ? WHERE id = ?`,
+		td.Title, jsonText(types), jsonText(funcs), jsonText(groups), s.now().Unix(), app, td.ID)
 	if err != nil {
 		return err
 	}
@@ -384,9 +387,9 @@ func jsonText(v any) string {
 
 func (s *Service) thing(id string) (ThingRecord, error) {
 	var t ThingRecord
-	var types, seen, funcs, zones string
-	err := s.store.db.QueryRow(`SELECT id, title, types, seen_types, functions, zones, adopted, seen, app FROM things WHERE id = ?`, id).
-		Scan(&t.ID, &t.Title, &types, &seen, &funcs, &zones, &t.Adopted, &t.Seen, &t.App)
+	var types, seen, funcs, zones, groups string
+	err := s.store.db.QueryRow(`SELECT id, title, types, seen_types, functions, zones, groups, adopted, seen, app FROM things WHERE id = ?`, id).
+		Scan(&t.ID, &t.Title, &types, &seen, &funcs, &zones, &groups, &t.Adopted, &t.Seen, &t.App)
 	if errors.Is(err, sql.ErrNoRows) {
 		return t, ErrNotFound
 	}
@@ -423,9 +426,15 @@ func (s *Service) thing(id string) (ThingRecord, error) {
 			t.States[state][key] = r
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return t, err
+	}
 	t.Defaults = defaults(t.Types, t.Functions)
 	t.Effective = s.effective(t)
-	return t, rows.Err()
+	var declared []Group
+	json.Unmarshal([]byte(groups), &declared)
+	t.Groups, err = s.groupViews(t, declared)
+	return t, err
 }
 
 // effective is the table the Thing gets (§2.5): default, else the admin's
@@ -503,6 +512,7 @@ func (s *Service) ForgetThing(id string) error {
 		return ErrNotFound
 	}
 	s.store.db.Exec(`DELETE FROM rules WHERE thing = ?`, id)
+	s.store.db.Exec(`DELETE FROM group_rules WHERE thing = ?`, id)
 	s.store.log("thing.forget", id)
 	return nil
 }
@@ -547,6 +557,9 @@ func (s *Service) SetRule(id, state, key string, r *Rule) error {
 	}
 	if state != "" && !s.knownState(state) {
 		return Invalid("unknown state")
+	}
+	if state == "" && t.inSetGroup(key) {
+		return Invalid("set by its group: set the group function by function first")
 	}
 	if r == nil {
 		_, err = s.store.db.Exec(`DELETE FROM rules WHERE thing = ? AND state = ? AND key = ?`, id, state, key)
