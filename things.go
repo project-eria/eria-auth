@@ -260,6 +260,14 @@ func (s *Service) ReceiveTD(td TDIn, app string) error {
 	if err := s.pruneGroups(td.ID, groups); err != nil {
 		return err
 	}
+	// Regrouping changes what « accept » applies: journaled like a new TD.
+	declared := []Group{}
+	for _, g := range old.Groups {
+		declared = append(declared, g.Group)
+	}
+	if jsonText(declared) != jsonText(groups) {
+		s.store.log("thing.groups", fmt.Sprintf("%s %s", td.ID, jsonText(groups)))
+	}
 	if old.App == "" && app != "" {
 		s.store.log("thing.app", td.ID+" signed by app "+app)
 	}

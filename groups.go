@@ -132,7 +132,9 @@ func (s *Service) groupRows(thing string) (map[string]groupRow, error) {
 	for rows.Next() {
 		var id, members, declined string
 		var g groupRow
-		rows.Scan(&id, &g.individual, &g.rule.Levels[0], &g.rule.Levels[1], &g.rule.Levels[2], &g.rule.Confirm, &members, &declined)
+		if err := rows.Scan(&id, &g.individual, &g.rule.Levels[0], &g.rule.Levels[1], &g.rule.Levels[2], &g.rule.Confirm, &members, &declined); err != nil {
+			return nil, err
+		}
 		json.Unmarshal([]byte(members), &g.members)
 		json.Unmarshal([]byte(declined), &g.declined)
 		out[id] = g
@@ -208,9 +210,13 @@ func (t ThingRecord) inSetGroup(key string) bool {
 }
 
 // SetGroupRule sets a group's rule, written on every member (the pending
-// ones too: the admin chose it with the list in front of him); nil sets the
-// group function by function, each keeping its rule.
-func (s *Service) SetGroupRule(id, group string, r *Rule) error {
+// ones too: the admin chose it with the list in front of him); individual
+// sets the group function by function, each keeping its rule. One of the
+// two, said: an empty body never switches a group.
+func (s *Service) SetGroupRule(id, group string, r *Rule, individual bool) error {
+	if (r == nil) != individual {
+		return Invalid("a rule or individual, one of the two")
+	}
 	t, err := s.thing(id)
 	if err != nil {
 		return err
