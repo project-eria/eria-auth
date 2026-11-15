@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -136,4 +137,23 @@ func TestHeartbeat(t *testing.T) {
 	_, table, _ := h.svc.TableDoc("urn:eria:garage:1")
 	assert.Equal(t, map[string]int64{"urn:eria:garage:1": table, "urn:eria:salon:1": 0, "urn:eria:nowhere": 0}, d.Versions.Tables)
 	assert.Positive(t, d.Versions.Revocation)
+}
+
+// A property name holding a "/" (service-astral's today/sunrise) is one
+// function: listed, ruled and in the table like any other.
+func TestSlashedFunctionName(t *testing.T) {
+	h := newHouse(t)
+	td := TDIn{ID: "urn:eria:service:astral:1", Title: "Astral",
+		Properties: map[string]json.RawMessage{"today/sunrise": json.RawMessage(`{"readOnly": true}`)}}
+	require.NoError(t, h.svc.ReceiveTD(td, ""))
+	require.NoError(t, h.svc.AdoptThing(td.ID))
+	key := "property/today/sunrise/read"
+	require.NoError(t, h.svc.SetRule(td.ID, "", key, &Rule{Levels: [3]int{9, 9, 9}}))
+	th, err := h.svc.thing(td.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{key}, th.Functions)
+	assert.Equal(t, Rule{Levels: [3]int{9, 9, 9}}, th.Effective[key])
+
+	td.Properties = map[string]json.RawMessage{"today/sun rise": json.RawMessage(`{}`)}
+	assert.Error(t, h.svc.ReceiveTD(td, ""), "each segment of the name is checked")
 }

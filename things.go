@@ -92,8 +92,11 @@ func (td TDIn) functions() ([]string, error) {
 		keys = append(keys, "event/"+name+"/read")
 	}
 	for _, k := range keys {
-		if !nameRe.MatchString(strings.Split(k, "/")[1]) {
-			return nil, Invalid("affordance name not allowed: " + k)
+		_, name, _ := splitKey(k)
+		for _, seg := range strings.Split(name, "/") {
+			if !nameRe.MatchString(seg) {
+				return nil, Invalid("affordance name not allowed: " + k)
+			}
 		}
 	}
 	if len(keys) > maxFuncs {
@@ -325,12 +328,14 @@ func defaults(types []string, funcs []string) map[string]Rule {
 	return out
 }
 
+// splitKey cuts kind/name/op; the name may hold "/" (service-astral's
+// today/sunrise, routed by the guard since go-wot v1.16.1).
 func splitKey(key string) (kind, name, op string) {
 	parts := strings.Split(key, "/")
-	if len(parts) != 3 {
+	if len(parts) < 3 {
 		return "", "", ""
 	}
-	return parts[0], parts[1], parts[2]
+	return parts[0], strings.Join(parts[1:len(parts)-1], "/"), parts[len(parts)-1]
 }
 
 // strictest is the min of the levels (None lowest) and the widest confirmation.
