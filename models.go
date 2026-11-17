@@ -105,7 +105,14 @@ func (s *Service) SetModelRule(modelID, key string, r *Rule) error {
 	if _, ok := eriaDefault(modelID, key); !ok {
 		return Invalid("not a function of this model")
 	}
-	var err error
+	// Unchanged: no journal line, no new tables for the whole model.
+	admin, err := s.modelRules()
+	if err != nil {
+		return err
+	}
+	if held, ok := admin[modelID][key]; (r == nil && !ok) || (r != nil && ok && held == *r) {
+		return nil
+	}
 	if r == nil {
 		_, err = s.store.db.Exec(`DELETE FROM model_rules WHERE model = ? AND key = ?`, modelID, key)
 	} else {

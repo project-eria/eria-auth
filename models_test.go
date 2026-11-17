@@ -79,3 +79,32 @@ func TestModelRules(t *testing.T) {
 	require.Equal(t, 200, h.call("PUT", "/v1/models/LightBasic/rules", admin, map[string]any{"key": toggle, "rule": nil}, nil))
 	assert.Equal(t, eria, defaultOf("urn:eria:knx:a"))
 }
+
+// FollowModel leaves the functions ruled by a group set as a group alone,
+// and the state overrides.
+func TestFollowModelKeepsGroupRule(t *testing.T) {
+	h := newHouse(t)
+	h.bootstrapAdmin()
+	id := "urn:eria:knx:g"
+	require.NoError(t, h.svc.ReceiveTD(TDIn{ID: id, Title: id, Types: json.RawMessage(`["LightBasic"]`),
+		Properties: map[string]json.RawMessage{"on": json.RawMessage(`{"readOnly": true}`), "scene": json.RawMessage(`{"readOnly": true}`)},
+		Actions:    map[string]json.RawMessage{"toggle": json.RawMessage(`{}`)},
+		Groups:     []Group{{ID: "reads", Title: "Lectures", Functions: []string{"property/on/read", "property/scene/read"}}}}, ""))
+	require.NoError(t, h.svc.AdoptThing(id))
+	grp := Rule{Levels: [3]int{9, 9, 1}}
+	require.NoError(t, h.svc.SetGroupRule(id, "reads", &grp, false))
+	own := Rule{Levels: [3]int{9, 8, 0}, Confirm: auth.Never}
+	require.NoError(t, h.svc.SetRule(id, "", "action/toggle/invoke", &own))
+	_, err := h.svc.store.db.Exec(`INSERT INTO contexts (id, label, position) VALUES ('night', 'Nuit', 0)`)
+	require.NoError(t, err)
+	require.NoError(t, h.svc.SetRule(id, "night", "action/toggle/invoke", &Rule{Levels: [3]int{1, 0, 0}, Confirm: auth.Never}))
+
+	n, err := h.svc.FollowModel("LightBasic")
+	require.NoError(t, err)
+	assert.Equal(t, 1, n, "only the own rule on toggle goes")
+	th, err := h.svc.thing(id)
+	require.NoError(t, err)
+	assert.Equal(t, grp, th.Rules["property/on/read"], "the group rule on a model function stays")
+	assert.NotContains(t, th.Rules, "action/toggle/invoke")
+	assert.Equal(t, [3]int{1, 0, 0}, th.States["night"]["action/toggle/invoke"].Levels, "states stay")
+}
