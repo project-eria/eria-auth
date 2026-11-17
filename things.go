@@ -42,7 +42,7 @@ type ThingRecord struct {
 	Defaults  map[string]Rule   `json:"defaults"`         // from the adopted capabilities
 	// The defaults the capabilities of the last TD would give, while they
 	// differ from the adopted ones: what accepting them (adopt again) opens.
-	SeenDefaults map[string]Rule `json:"seenDefaults,omitempty"`
+	SeenDefaults map[string]Rule `json:"seenDefaults"` // null unless the types changed: never absent, so the app tells « nothing changes » from an older auth
 	Effective auth.Table        `json:"effective"`        // what the Thing gets now
 	States    map[string]States `json:"states,omitempty"` // overrides, by state then key
 	Groups    []GroupView       `json:"groups"`           // eria:groups of the last TD, with the admin's choices
