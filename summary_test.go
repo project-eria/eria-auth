@@ -41,7 +41,7 @@ func TestSummary(t *testing.T) {
 		"Refus : 3",
 		"- par personne : Paul 2",
 		"- par appareil : urn:eria:garage:1 2",
-		"Commandes confirmées : 2 (dont 1 hors de la maison)",
+		"Commandes confirmables : 2 (dont 1 hors de la maison)",
 		"- Paul : thing:urn:eria:garage:1 sur urn:eria:garage:1",
 		"- urn:eria:garage:1 : 2", // no capability adopted: no default, no rule
 		"- Écran cuisine",

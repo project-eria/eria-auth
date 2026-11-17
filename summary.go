@@ -122,7 +122,7 @@ func (s *Service) Summary(day string) (string, error) {
 			}
 		}
 	}
-	fmt.Fprintf(&b, "Commandes confirmées : %d (dont %d hors de la maison)\n", confirmed, outside)
+	fmt.Fprintf(&b, "Commandes confirmables : %d (dont %d hors de la maison)\n", confirmed, outside)
 	list(&b, "Premier usage d'un accès accordé", "aucun", firsts)
 
 	// Unclassified functions of the adopted Things.
