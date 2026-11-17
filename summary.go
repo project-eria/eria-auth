@@ -133,7 +133,8 @@ func (s *Service) Summary(day string) (string, error) {
 		}
 		n := 0
 		for _, f := range t.Functions {
-			if _, ok := t.Defaults[f]; !ok {
+			// A function of a model not set is closed, not classified.
+			if r, ok := t.Defaults[f]; !ok || r.Levels == [3]int{} {
 				if _, ok := t.Rules[f]; !ok {
 					n++
 				}
