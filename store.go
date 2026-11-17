@@ -190,6 +190,17 @@ func OpenStore(path string) (*Store, error) {
 		declined   TEXT NOT NULL DEFAULT '[]',
 		PRIMARY KEY (thing, grp)
 	)`)
+	// A model's rule changed by the admin (§2.4, models): the default of
+	// the function on every Thing of that model, ERIA's staying the start.
+	db.Exec(`CREATE TABLE IF NOT EXISTS model_rules (
+		model   TEXT NOT NULL,
+		key     TEXT NOT NULL,
+		l0      INTEGER NOT NULL,
+		l1      INTEGER NOT NULL,
+		l2      INTEGER NOT NULL,
+		confirm TEXT NOT NULL DEFAULT '',
+		PRIMARY KEY (model, key)
+	)`)
 	st := &Store{db: db, now: time.Now, changed: func() {}, written: make(chan struct{}, 1)}
 	if err := st.migrateConfig(); err != nil {
 		return nil, err

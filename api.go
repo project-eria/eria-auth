@@ -403,6 +403,22 @@ func (s *Service) Handler() http.Handler {
 	}) (any, error) {
 		return nil, s.SettlePending(r.PathValue("id"), r.PathValue("group"), in.Key, in.Accept)
 	})))
+	// Models (§2.4, models): a model's rule for one of its functions (null:
+	// ERIA's), and its Things following it again on its functions.
+	mux.HandleFunc("GET /v1/models", admin(func(w http.ResponseWriter, r *http.Request) {
+		list, err := s.Models()
+		reply(w, list, err)
+	}))
+	mux.HandleFunc("PUT /v1/models/{model}/rules", admin(handle(func(r *http.Request, in struct {
+		Key  string
+		Rule *Rule
+	}) (any, error) {
+		return nil, s.SetModelRule(r.PathValue("model"), in.Key, in.Rule)
+	})))
+	mux.HandleFunc("POST /v1/models/{model}/follow", admin(func(w http.ResponseWriter, r *http.Request) {
+		n, err := s.FollowModel(r.PathValue("model"))
+		reply(w, map[string]int{"removed": n}, err)
+	}))
 	// Apps (§1.3): their keys come from the coordinator; the admin can only cut one off.
 	mux.HandleFunc("GET /v1/apps", admin(func(w http.ResponseWriter, r *http.Request) {
 		list, err := s.Apps()

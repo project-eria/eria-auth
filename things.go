@@ -304,34 +304,51 @@ var exceptions = map[string]map[string]Rule{
 	},
 }
 
-// defaults gives the default rule of each function of the capabilities:
-// the most restrictive when two capabilities share a function.
-func defaults(types []string, funcs []string) map[string]Rule {
+// eriaDefault is ERIA's rule for a function of a model, false when the
+// function is not the model's.
+func eriaDefault(modelID, key string) (Rule, bool) {
+	m, ok := model.Models[modelID]
+	if !ok {
+		return Rule{}, false
+	}
+	kind, name, op := splitKey(key)
+	_, prop := m.Properties[name]
+	_, act := m.Actions[name]
+	_, ev := m.Events[name]
+	var r Rule
+	switch {
+	case kind == "property" && prop || kind == "event" && ev:
+		r = read
+		if op == "write" {
+			r = command
+		}
+	case kind == "action" && act:
+		r = command
+		if strings.HasPrefix(name, "calibrate") {
+			r = parents
+		}
+	default:
+		return Rule{}, false
+	}
+	if e, ok := exceptions[modelID][key]; ok {
+		r = e
+	}
+	return r, true
+}
+
+// defaults gives the default rule of each function of the capabilities: the
+// admin's rule of the model (models.go), else ERIA's; the most restrictive
+// when two capabilities share a function.
+func defaults(types []string, funcs []string, admin modelRules) map[string]Rule {
 	out := map[string]Rule{}
 	for _, t := range types {
-		m := model.Models[t]
 		for _, key := range funcs {
-			kind, name, op := splitKey(key)
-			_, prop := m.Properties[name]
-			_, act := m.Actions[name]
-			_, ev := m.Events[name]
-			var r Rule
-			switch {
-			case kind == "property" && prop || kind == "event" && ev:
-				r = read
-				if op == "write" {
-					r = command
-				}
-			case kind == "action" && act:
-				r = command
-				if strings.HasPrefix(name, "calibrate") {
-					r = parents
-				}
-			default:
+			r, ok := eriaDefault(t, key)
+			if !ok {
 				continue
 			}
-			if e, ok := exceptions[t][key]; ok {
-				r = e
+			if a, ok := admin[t][key]; ok {
+				r = a
 			}
 			if prev, ok := out[key]; ok {
 				r = strictest(prev, r)
@@ -440,7 +457,11 @@ func (s *Service) thing(id string) (ThingRecord, error) {
 	if err := rows.Err(); err != nil {
 		return t, err
 	}
-	t.Defaults = defaults(t.Types, t.Functions)
+	admin, err := s.modelRules()
+	if err != nil {
+		return t, err
+	}
+	t.Defaults = defaults(t.Types, t.Functions, admin)
 	t.Effective = s.effective(t)
 	var declared []Group
 	json.Unmarshal([]byte(groups), &declared)
