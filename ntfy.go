@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	zlog "github.com/rs/zerolog/log"
@@ -13,9 +14,22 @@ import (
 // alerts are only logged.
 func ntfy(url string) func(title string) {
 	client := &http.Client{Timeout: 10 * time.Second}
+	// One push per title a minute: an app restarting with 50 Things sends
+	// one alert, not 50 (the log keeps every one).
+	var mu sync.Mutex
+	last := map[string]time.Time{}
 	return func(title string) {
 		zlog.Warn().Str("alert", title).Msg("[ntfy]")
 		if url == "" {
+			return
+		}
+		mu.Lock()
+		quiet := time.Since(last[title]) < time.Minute
+		if !quiet {
+			last[title] = time.Now()
+		}
+		mu.Unlock()
+		if quiet {
 			return
 		}
 		go func() {

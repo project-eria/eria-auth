@@ -40,6 +40,9 @@ type ThingRecord struct {
 	App       string            `json:"app"`              // id of the app that signs its TD, "" before step 3
 	Rules     map[string]Rule   `json:"rules"`            // set by the admin
 	Defaults  map[string]Rule   `json:"defaults"`         // from the adopted capabilities
+	// The defaults the capabilities of the last TD would give, while they
+	// differ from the adopted ones: what accepting them (adopt again) opens.
+	SeenDefaults map[string]Rule `json:"seenDefaults,omitempty"`
 	Effective auth.Table        `json:"effective"`        // what the Thing gets now
 	States    map[string]States `json:"states,omitempty"` // overrides, by state then key
 	Groups    []GroupView       `json:"groups"`           // eria:groups of the last TD, with the admin's choices
@@ -462,6 +465,9 @@ func (s *Service) thing(id string) (ThingRecord, error) {
 		return t, err
 	}
 	t.Defaults = defaults(t.Types, t.Functions, admin)
+	if t.Adopted && !slices.Equal(t.Types, t.SeenTypes) {
+		t.SeenDefaults = defaults(t.SeenTypes, t.Functions, admin)
+	}
 	t.Effective = s.effective(t)
 	var declared []Group
 	json.Unmarshal([]byte(groups), &declared)

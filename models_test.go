@@ -108,3 +108,30 @@ func TestFollowModelKeepsGroupRule(t *testing.T) {
 	assert.NotContains(t, th.Rules, "action/toggle/invoke")
 	assert.Equal(t, [3]int{1, 0, 0}, th.States["night"]["action/toggle/invoke"].Levels, "states stay")
 }
+
+// An adopted Thing whose TD names models it was adopted without shows what
+// accepting them gives; adopting again takes them.
+func TestAcceptModels(t *testing.T) {
+	h := newHouse(t)
+	h.bootstrapAdmin()
+	id := "urn:eria:knx:old"
+	td := TDIn{ID: id, Title: id, Properties: map[string]json.RawMessage{"on": json.RawMessage(`{"readOnly": true}`)},
+		Actions: map[string]json.RawMessage{"toggle": json.RawMessage(`{}`)}}
+	require.NoError(t, h.svc.ReceiveTD(td, ""))
+	require.NoError(t, h.svc.AdoptThing(id))
+	th, _ := h.svc.thing(id)
+	assert.Empty(t, th.Defaults)
+	assert.Nil(t, th.SeenDefaults)
+
+	td.Types = json.RawMessage(`["LightBasic"]`)
+	require.NoError(t, h.svc.ReceiveTD(td, ""))
+	th, _ = h.svc.thing(id)
+	assert.Empty(t, th.Defaults, "not before the admin accepts")
+	assert.Equal(t, Rule{Levels: [3]int{9, 8, 0}, Confirm: auth.Never}, th.SeenDefaults["action/toggle/invoke"])
+
+	require.NoError(t, h.svc.AdoptThing(id))
+	th, _ = h.svc.thing(id)
+	assert.Equal(t, []string{"LightBasic"}, th.Types)
+	assert.Equal(t, Rule{Levels: [3]int{9, 8, 0}, Confirm: auth.Never}, th.Defaults["action/toggle/invoke"])
+	assert.Nil(t, th.SeenDefaults)
+}
