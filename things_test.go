@@ -54,7 +54,8 @@ func TestThingTables(t *testing.T) {
 	assert.Equal(t, 404, status)
 	assert.Equal(t, 403, h.call("POST", path+"/adopt", "", nil, nil), "admin only")
 
-	// Adopted: defaults of GarageDoor; light is not one of its functions.
+	// Adopted: the admin's rules of GarageDoor; light is not one of its functions.
+	garageModel(t, h.svc)
 	require.Equal(t, 200, h.call("POST", path+"/adopt", admin, nil, nil))
 	d := table()
 	assert.Equal(t, Rule{Levels: [3]int{1, 1, 1}, Confirm: auth.OutsideRoom}, d.Table["action/open/invoke"])
@@ -156,4 +157,16 @@ func TestSlashedFunctionName(t *testing.T) {
 
 	td.Properties = map[string]json.RawMessage{"today/sun rise": json.RawMessage(`{}`)}
 	assert.Error(t, h.svc.ReceiveTD(td, ""), "each segment of the name is checked")
+}
+
+// garageModel sets the rules of GarageDoor the tests expect (no rule is
+// written in the code): commands for adults with confirmation outside the
+// room, its state read in the house by adults.
+func garageModel(t *testing.T, s *Service) {
+	cmd := Rule{Levels: [3]int{1, 1, 1}, Confirm: auth.OutsideRoom}
+	state := Rule{Levels: [3]int{9, 1, 1}}
+	for key, r := range map[string]*Rule{"action/open/invoke": &cmd, "action/close/invoke": &cmd,
+		"property/open/read": &state, "property/closed/read": &state, "property/moving/read": &state} {
+		require.NoError(t, s.SetModelRule("GarageDoor", key, r))
+	}
 }

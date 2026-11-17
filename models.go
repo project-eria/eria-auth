@@ -2,9 +2,9 @@ package main
 
 // Rules of the models (AUTH-DESIGN §2.4, models, decided 2026-11-17): the
 // default of a function comes from the eria-core models of its Thing
-// (LightBasic…). The admin may change a model's rule for a function, ERIA's
-// staying the starting point; every Thing of the model follows it where it
-// has no rule of its own. Own rule = a row in rules, never removed but by the
+// (LightBasic…), as the admin set the model's rule for that function; unset,
+// None (no rule written in the code). Every Thing of the model follows it
+// where it has no rule of its own. Own rule = a row in rules, never removed but by the
 // admin (« suivre le modèle »): a rule equal to the model's stays one.
 
 import (
@@ -26,11 +26,10 @@ type ModelView struct {
 	Functions []ModelFunction `json:"functions"`
 }
 
-// ModelFunction is a function of a model: ERIA's rule and the admin's.
+// ModelFunction is a function of a model and the admin's rule for it.
 type ModelFunction struct {
 	Key  string `json:"key"`
-	ERIA Rule   `json:"eria"`
-	Rule *Rule  `json:"rule"` // the admin's, nil: ERIA's
+	Rule *Rule  `json:"rule"` // nil: not set, None
 }
 
 func (s *Service) modelRules() (modelRules, error) {
@@ -80,7 +79,7 @@ func (s *Service) Models() ([]ModelView, error) {
 			}
 			v.Things = append(v.Things, t.ID)
 			for _, key := range t.Functions {
-				if _, ok := eriaDefault(id, key); ok && !slices.Contains(keys, key) {
+				if inModel(id, key) && !slices.Contains(keys, key) {
 					keys = append(keys, key)
 				}
 			}
@@ -88,7 +87,6 @@ func (s *Service) Models() ([]ModelView, error) {
 		sort.Strings(keys)
 		for _, key := range keys {
 			f := ModelFunction{Key: key}
-			f.ERIA, _ = eriaDefault(id, key)
 			if r, ok := admin[id][key]; ok {
 				f.Rule = &r
 			}
@@ -99,10 +97,10 @@ func (s *Service) Models() ([]ModelView, error) {
 	return out, nil
 }
 
-// SetModelRule sets a model's rule for one of its functions; nil gives it
-// ERIA's again. The Things of the model get their new table.
+// SetModelRule sets a model's rule for one of its functions; nil unsets it
+// (None). The Things of the model get their new table.
 func (s *Service) SetModelRule(modelID, key string, r *Rule) error {
-	if _, ok := eriaDefault(modelID, key); !ok {
+	if !inModel(modelID, key) {
 		return Invalid("not a function of this model")
 	}
 	// Unchanged: no journal line, no new tables for the whole model.
@@ -147,7 +145,7 @@ func (s *Service) FollowModel(modelID string) (int, error) {
 			continue
 		}
 		for key := range t.Rules {
-			if _, ok := eriaDefault(modelID, key); !ok || t.inSetGroup(key) {
+			if !inModel(modelID, key) || t.inSetGroup(key) {
 				continue
 			}
 			if _, err := s.store.db.Exec(`DELETE FROM rules WHERE thing = ? AND state = '' AND key = ?`, t.ID, key); err != nil {

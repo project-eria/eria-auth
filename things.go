@@ -284,75 +284,34 @@ func (s *Service) ReceiveTD(td TDIn, app string) error {
 	return nil
 }
 
-// --- Defaults (§2.4): deduced from the capability ---
+// --- Defaults (§2.4): the admin's rules of the models ---
 
-var (
-	read    = Rule{Levels: [3]int{9, 9, 8}}
-	command = Rule{Levels: [3]int{9, 8, authz.None}, Confirm: auth.Never}
-	parents = Rule{Levels: [3]int{1, 1, authz.None}, Confirm: auth.Never}
-)
-
-// exceptions to read / command, by capability then key.
-var exceptions = map[string]map[string]Rule{
-	"GarageDoor": {
-		"property/open/read":   {Levels: [3]int{9, 1, 1}},
-		"property/closed/read": {Levels: [3]int{9, 1, 1}},
-		"property/moving/read": {Levels: [3]int{9, 1, 1}},
-		"action/open/invoke":   {Levels: [3]int{1, 1, 1}, Confirm: auth.OutsideRoom},
-		"action/close/invoke":  {Levels: [3]int{1, 1, 1}, Confirm: auth.OutsideRoom},
-	},
-	"EriaAppController": {
-		"property/logLevel/read":  {Levels: [3]int{1, 1, authz.None}},
-		"property/logLevel/write": parents,
-	},
-}
-
-// eriaDefault is ERIA's rule for a function of a model, false when the
-// function is not the model's.
-func eriaDefault(modelID, key string) (Rule, bool) {
+// inModel says whether a function is one of a model's (eria-core).
+func inModel(modelID, key string) bool {
 	m, ok := model.Models[modelID]
 	if !ok {
-		return Rule{}, false
+		return false
 	}
-	kind, name, op := splitKey(key)
+	kind, name, _ := splitKey(key)
 	_, prop := m.Properties[name]
 	_, act := m.Actions[name]
 	_, ev := m.Events[name]
-	var r Rule
-	switch {
-	case kind == "property" && prop || kind == "event" && ev:
-		r = read
-		if op == "write" {
-			r = command
-		}
-	case kind == "action" && act:
-		r = command
-		if strings.HasPrefix(name, "calibrate") {
-			r = parents
-		}
-	default:
-		return Rule{}, false
-	}
-	if e, ok := exceptions[modelID][key]; ok {
-		r = e
-	}
-	return r, true
+	return kind == "property" && prop || kind == "event" && ev || kind == "action" && act
 }
 
 // defaults gives the default rule of each function of the capabilities: the
-// admin's rule of the model (models.go), else ERIA's; the most restrictive
-// when two capabilities share a function.
+// admin's rule of the model (models.go). No rule written in the code
+// (decided 2026-11-17): a model the admin has not set is None, so a function
+// of a model is listed (it follows the model) but closed. The most
+// restrictive when two capabilities share a function.
 func defaults(types []string, funcs []string, admin modelRules) map[string]Rule {
 	out := map[string]Rule{}
 	for _, t := range types {
 		for _, key := range funcs {
-			r, ok := eriaDefault(t, key)
-			if !ok {
+			if !inModel(t, key) {
 				continue
 			}
-			if a, ok := admin[t][key]; ok {
-				r = a
-			}
+			r := admin[t][key] // None when unset
 			if prev, ok := out[key]; ok {
 				r = strictest(prev, r)
 			}

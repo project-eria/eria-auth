@@ -404,7 +404,7 @@ func (s *Service) Handler() http.Handler {
 		return nil, s.SettlePending(r.PathValue("id"), r.PathValue("group"), in.Key, in.Accept)
 	})))
 	// Models (§2.4, models): a model's rule for one of its functions (null:
-	// ERIA's), and its Things following it again on its functions.
+	// unset, None), and its Things following it again on its functions.
 	mux.HandleFunc("GET /v1/models", admin(func(w http.ResponseWriter, r *http.Request) {
 		list, err := s.Models()
 		reply(w, list, err)

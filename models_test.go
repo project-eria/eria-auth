@@ -30,8 +30,8 @@ func TestModelRules(t *testing.T) {
 		require.NoError(t, err)
 		return th.Defaults[toggle]
 	}
-	eria := Rule{Levels: [3]int{9, 8, 0}, Confirm: auth.Never}
-	assert.Equal(t, eria, defaultOf("urn:eria:knx:a"))
+	none := Rule{} // a model not set: closed, no rule written in the code
+	assert.Equal(t, none, defaultOf("urn:eria:knx:a"))
 
 	// b has its own rule; the model changes for both, b keeps its own.
 	own := Rule{Levels: [3]int{9, 9, 0}, Confirm: auth.Never}
@@ -61,7 +61,6 @@ func TestModelRules(t *testing.T) {
 	assert.Equal(t, []string{"urn:eria:knx:a", "urn:eria:knx:b"}, lb.Things)
 	require.Len(t, lb.Functions, 2)
 	assert.Equal(t, toggle, lb.Functions[0].Key)
-	assert.Equal(t, eria, lb.Functions[0].ERIA)
 	assert.Equal(t, &set, lb.Functions[0].Rule)
 
 	// Follow the model: b's own rule goes; the scene rule (out of model) stays.
@@ -75,9 +74,9 @@ func TestModelRules(t *testing.T) {
 	assert.Equal(t, scene, b.Rules["property/scene/read"])
 	assert.Equal(t, set, b.Effective[toggle])
 
-	// Back to ERIA's rule.
+	// Unset: closed again.
 	require.Equal(t, 200, h.call("PUT", "/v1/models/LightBasic/rules", admin, map[string]any{"key": toggle, "rule": nil}, nil))
-	assert.Equal(t, eria, defaultOf("urn:eria:knx:a"))
+	assert.Equal(t, none, defaultOf("urn:eria:knx:a"))
 }
 
 // FollowModel leaves the functions ruled by a group set as a group alone,
@@ -123,15 +122,18 @@ func TestAcceptModels(t *testing.T) {
 	assert.Empty(t, th.Defaults)
 	assert.Nil(t, th.SeenDefaults)
 
+	set := Rule{Levels: [3]int{9, 8, 0}, Confirm: auth.Never}
+	require.NoError(t, h.svc.SetModelRule("LightBasic", "action/toggle/invoke", &set))
 	td.Types = json.RawMessage(`["LightBasic"]`)
 	require.NoError(t, h.svc.ReceiveTD(td, ""))
 	th, _ = h.svc.thing(id)
 	assert.Empty(t, th.Defaults, "not before the admin accepts")
-	assert.Equal(t, Rule{Levels: [3]int{9, 8, 0}, Confirm: auth.Never}, th.SeenDefaults["action/toggle/invoke"])
+	assert.Equal(t, set, th.SeenDefaults["action/toggle/invoke"])
+	assert.Equal(t, Rule{}, th.SeenDefaults["property/on/read"], "a function of the model not set: closed")
 
 	require.NoError(t, h.svc.AdoptThing(id))
 	th, _ = h.svc.thing(id)
 	assert.Equal(t, []string{"LightBasic"}, th.Types)
-	assert.Equal(t, Rule{Levels: [3]int{9, 8, 0}, Confirm: auth.Never}, th.Defaults["action/toggle/invoke"])
+	assert.Equal(t, set, th.Defaults["action/toggle/invoke"])
 	assert.Nil(t, th.SeenDefaults)
 }

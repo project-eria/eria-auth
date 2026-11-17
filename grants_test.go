@@ -44,6 +44,7 @@ func TestPersonGrants(t *testing.T) {
 	assert.Nil(t, h.svc.personGrants(lea.ID, Terminal{Floor: 3}), "a floor above 1 carries no grant")
 
 	// The garage's open is confirmable: 90 days at most.
+	garageModel(t, h.svc)
 	require.NoError(t, h.svc.ReceiveTD(mustTD(t, garageTD), ""))
 	require.NoError(t, h.svc.AdoptThing("urn:eria:garage:1"))
 	code, g = add("thing:urn:eria:garage:1:invoke", h.now.Add(365*24*time.Hour).Unix())
