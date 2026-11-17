@@ -29,23 +29,23 @@ import (
 
 // ThingRecord is a Thing as the admin sees it.
 type ThingRecord struct {
-	ID        string            `json:"id"`
-	Title     string            `json:"title"`
-	Types     []string          `json:"types"`            // capabilities adopted
-	SeenTypes []string          `json:"seenTypes"`        // capabilities of the last TD
-	Functions []string          `json:"functions"`        // keys of the last TD
-	Zones     []string          `json:"zones"`            // rooms (§2.2)
-	Adopted   bool              `json:"adopted"`          // has a table
-	Seen      int64             `json:"seen"`             // last TD received
-	App       string            `json:"app"`              // id of the app that signs its TD, "" before step 3
-	Rules     map[string]Rule   `json:"rules"`            // set by the admin
-	Defaults  map[string]Rule   `json:"defaults"`         // from the adopted capabilities
+	ID        string          `json:"id"`
+	Title     string          `json:"title"`
+	Types     []string        `json:"types"`     // capabilities adopted
+	SeenTypes []string        `json:"seenTypes"` // capabilities of the last TD
+	Functions []string        `json:"functions"` // keys of the last TD
+	Zones     []string        `json:"zones"`     // rooms (§2.2)
+	Adopted   bool            `json:"adopted"`   // has a table
+	Seen      int64           `json:"seen"`      // last TD received
+	App       string          `json:"app"`       // id of the app that signs its TD, "" before step 3
+	Rules     map[string]Rule `json:"rules"`     // set by the admin
+	Defaults  map[string]Rule `json:"defaults"`  // from the adopted capabilities
 	// The defaults the capabilities of the last TD would give, while they
 	// differ from the adopted ones: what accepting them (adopt again) opens.
-	SeenDefaults map[string]Rule `json:"seenDefaults"` // null unless the types changed: never absent, so the app tells « nothing changes » from an older auth
-	Effective auth.Table        `json:"effective"`        // what the Thing gets now
-	States    map[string]States `json:"states,omitempty"` // overrides, by state then key
-	Groups    []GroupView       `json:"groups"`           // eria:groups of the last TD, with the admin's choices
+	SeenDefaults map[string]Rule   `json:"seenDefaults"`     // null unless the types changed: never absent, so the app tells « nothing changes » from an older auth
+	Effective    auth.Table        `json:"effective"`        // what the Thing gets now
+	States       map[string]States `json:"states,omitempty"` // overrides, by state then key
+	Groups       []GroupView       `json:"groups"`           // eria:groups of the last TD, with the admin's choices
 }
 
 // Rule is a requirement as stored: levels local, remote, outside (0 = None)
