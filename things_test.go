@@ -65,16 +65,10 @@ func TestThingTables(t *testing.T) {
 	// The admin classifies light, sets the room; a wrong rule is refused.
 	require.Equal(t, 200, h.call("PUT", path+"/rules", admin, map[string]any{"key": "property/light/write",
 		"rule": Rule{Levels: [3]int{9, 8, 0}, Confirm: auth.Never}}, nil))
-	assert.Equal(t, 400, h.call("PUT", path+"/rules", admin, map[string]any{"key": "action/close/invoke",
-		"rule": Rule{Levels: [3]int{9, 3, 1}, Confirm: auth.OutsideRoom}}, nil), "confirmed out of the room: level 1 at most there")
-	assert.Equal(t, 400, h.call("PUT", path+"/rules", admin, map[string]any{"key": "action/close/invoke",
-		"rule": Rule{Levels: [3]int{9, 9, 2}, Confirm: auth.OutsideHome}}, nil), "confirmed outside: level 1 at most outside")
-	assert.Equal(t, 400, h.call("PUT", path+"/rules", admin, map[string]any{"key": "action/close/invoke",
-		"rule": Rule{Levels: [3]int{2, 1, 1}, Confirm: auth.Always}}, nil), "always confirmed: level 1 at most everywhere")
 	assert.Equal(t, 400, h.call("PUT", path+"/rules", admin, map[string]any{"key": "property/light/read",
 		"rule": Rule{Levels: [3]int{9, 9, 9}, Confirm: auth.Always}}, nil), "no confirmation on a read")
-	// Where no confirmation is asked, the level is free.
-	for _, ok := range []Rule{{Levels: [3]int{9, 1, 1}, Confirm: auth.OutsideRoom}, {Levels: [3]int{9, 9, 1}, Confirm: auth.OutsideHome}} {
+	// The confirmation does not bind the level: a child confirms too.
+	for _, ok := range []Rule{{Levels: [3]int{9, 3, 1}, Confirm: auth.OutsideRoom}, {Levels: [3]int{9, 9, 2}, Confirm: auth.OutsideHome}, {Levels: [3]int{9, 9, 9}, Confirm: auth.Always}} {
 		require.Equal(t, 200, h.call("PUT", path+"/rules", admin, map[string]any{"key": "action/close/invoke", "rule": ok}, nil), ok)
 	}
 	require.Equal(t, 200, h.call("PUT", path+"/rules", admin, map[string]any{"key": "action/close/invoke", "rule": nil}, nil))

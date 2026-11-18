@@ -347,7 +347,8 @@ func confirmRank(c auth.Confirm) int {
 }
 
 // checkRule refuses what the admin may not set (§2.4): levels outside
-// None..9, a confirmation on a read, and a confirmed command open beyond 1.
+// None..9, a confirmation on a read. The confirmation does not bind the
+// level (decided 2026-11-18): a child may confirm with their own phone.
 func checkRule(key string, r Rule) error {
 	_, _, op := splitKey(key)
 	for _, l := range r.Levels {
@@ -362,11 +363,6 @@ func checkRule(key string, r Rule) error {
 		return Invalid("confirm_when required on a write or invoke")
 	case op != "read" && confirmRank(r.Confirm) == 0 && r.Confirm != auth.Never:
 		return Invalid("unknown confirm_when")
-	case confirmRank(r.Confirm) > 0 && slices.Max(r.Levels[3-confirmRank(r.Confirm):]) > 1:
-		// Level 1 at most where the confirmation is asked (§2.8): outside
-		// for « outside », out of the room for « remote », everywhere for
-		// « always »; the places without one stay free.
-		return Invalid("a confirmed command is for level 1 at most where it is confirmed")
 	}
 	return nil
 }

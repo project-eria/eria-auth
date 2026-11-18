@@ -46,7 +46,7 @@ func TestModelRules(t *testing.T) {
 	assert.Equal(t, 400, h.call("PUT", "/v1/models/LightBasic/rules", admin, map[string]any{"key": "property/scene/read", "rule": set}, nil))
 	assert.Equal(t, 400, h.call("PUT", "/v1/models/Nope/rules", admin, map[string]any{"key": toggle, "rule": set}, nil))
 	assert.Equal(t, 400, h.call("PUT", "/v1/models/LightBasic/rules", admin, map[string]any{"key": toggle,
-		"rule": Rule{Levels: [3]int{9, 9, 9}, Confirm: auth.Always}}, nil))
+		"rule": Rule{Levels: [3]int{9, 9, 9}}}, nil), "no confirm_when on an invoke")
 	assert.Equal(t, 403, h.call("PUT", "/v1/models/LightBasic/rules", "", map[string]any{"key": toggle, "rule": set}, nil))
 
 	// The list: LightBasic with its two Things and the admin's rule.
