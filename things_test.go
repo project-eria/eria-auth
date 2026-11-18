@@ -67,8 +67,12 @@ func TestThingTables(t *testing.T) {
 		"rule": Rule{Levels: [3]int{9, 8, 0}, Confirm: auth.Never}}, nil))
 	assert.Equal(t, 400, h.call("PUT", path+"/rules", admin, map[string]any{"key": "property/light/read",
 		"rule": Rule{Levels: [3]int{9, 9, 9}, Confirm: auth.Always}}, nil), "no confirmation on a read")
-	// The confirmation does not bind the level: a child confirms too.
-	for _, ok := range []Rule{{Levels: [3]int{9, 3, 1}, Confirm: auth.OutsideRoom}, {Levels: [3]int{9, 9, 2}, Confirm: auth.OutsideHome}, {Levels: [3]int{9, 9, 9}, Confirm: auth.Always}} {
+	// Where a confirmation is asked, a person only: 9 (a terminal alone) refused.
+	for _, bad := range []Rule{{Levels: [3]int{9, 9, 1}, Confirm: auth.OutsideRoom}, {Levels: [3]int{9, 9, 9}, Confirm: auth.OutsideHome}, {Levels: [3]int{9, 8, 8}, Confirm: auth.Always}} {
+		assert.Equal(t, 400, h.call("PUT", path+"/rules", admin, map[string]any{"key": "action/close/invoke", "rule": bad}, nil), bad)
+	}
+	// Otherwise the confirmation does not bind the level: a child confirms too.
+	for _, ok := range []Rule{{Levels: [3]int{9, 3, 1}, Confirm: auth.OutsideRoom}, {Levels: [3]int{9, 9, 2}, Confirm: auth.OutsideHome}, {Levels: [3]int{8, 8, 8}, Confirm: auth.Always}} {
 		require.Equal(t, 200, h.call("PUT", path+"/rules", admin, map[string]any{"key": "action/close/invoke", "rule": ok}, nil), ok)
 	}
 	require.Equal(t, 200, h.call("PUT", path+"/rules", admin, map[string]any{"key": "action/close/invoke", "rule": nil}, nil))
