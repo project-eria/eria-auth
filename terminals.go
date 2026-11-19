@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/project-eria/go-wot/auth"
+	zlog "github.com/rs/zerolog/log"
 )
 
 // TerminalChange are the admin's settings of a terminal (§2.5).
@@ -378,10 +379,14 @@ type BootstrapIn struct {
 
 func (s *Service) Bootstrap(in BootstrapIn, out bool) (string, error) {
 	if out {
+		zlog.Warn().Msg("[auth:bootstrap] refused: asked from outside the house")
 		return "", ErrDenied
 	}
-	res, err := s.store.db.Exec(`DELETE FROM bootstrap WHERE code = ? AND expires > ?`, sha(in.Code), s.now().Unix())
+	// Typed by hand: case and surrounding spaces don't matter (as enrollment codes).
+	code := strings.ToUpper(strings.TrimSpace(in.Code))
+	res, err := s.store.db.Exec(`DELETE FROM bootstrap WHERE code = ? AND expires > ?`, sha(code), s.now().Unix())
 	if n, _ := res.RowsAffected(); err != nil || n == 0 {
+		zlog.Warn().Msg("[auth:bootstrap] refused: unknown or expired code")
 		return "", ErrDenied
 	}
 	if err := checkPassphrase(in.Passphrase); err != nil {

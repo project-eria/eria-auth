@@ -516,3 +516,13 @@ func TestNewBio(t *testing.T) {
 	require.Equal(t, 200, h.call("DELETE", "/v1/terminals/"+phone.ID+"/bio", admin, nil, nil))
 	assert.Equal(t, "none", state().State)
 }
+
+// The bootstrap code is typed by hand: case and spaces around it don't matter.
+func TestBootstrapCodeTyped(t *testing.T) {
+	h := newHouse(t)
+	code, err := h.svc.NewBootstrapCode()
+	require.NoError(t, err)
+	in := BootstrapIn{Code: " " + strings.ToLower(code) + " ", Passphrase: "correct horse battery", Validator: p256Key(t).in,
+		Name: "yubikey", Computer: "PC du bureau", Identity: edKey(t).in}
+	assert.Equal(t, 200, h.call("POST", "/v1/bootstrap", "", in, nil))
+}
