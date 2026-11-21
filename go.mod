@@ -3,8 +3,8 @@ module eria-auth
 go 1.26.0
 
 require (
-	github.com/project-eria/eria-core v1.24.0
-	github.com/project-eria/go-wot v1.18.0
+	github.com/project-eria/eria-core v1.25.1
+	github.com/project-eria/go-wot v1.19.1
 	github.com/rs/zerolog v1.35.1
 	github.com/stretchr/testify v1.12.1
 	golang.org/x/crypto v0.58.0
