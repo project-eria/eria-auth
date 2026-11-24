@@ -83,6 +83,8 @@ type Page struct {
 	Version  int             `json:"version"` // +1 at each save, checked against conflicts
 	Elements []Element       `json:"elements"`
 	Options  json.RawMessage `json:"options"`
+	// The terminal profile it belongs to; fixed at creation.
+	TerminalProfile string `json:"terminalProfile"`
 }
 
 // Element is one function of a page; its fields depend on its type.
@@ -143,12 +145,12 @@ func isObject(raw json.RawMessage) bool {
 	return len(raw) == 0 || string(raw) == "null" || json.Unmarshal(raw, &v) == nil && v != nil
 }
 
-const pageColumns = `id, title, theme, aspect, layout, version, elements, options`
+const pageColumns = `id, title, theme, aspect, layout, version, elements, options, terminal_profile`
 
 func scanPage(row interface{ Scan(...any) error }) (Page, error) {
 	var p Page
 	var elements, options string
-	if err := row.Scan(&p.ID, &p.Title, &p.Theme, &p.Aspect, &p.Layout, &p.Version, &elements, &options); err != nil {
+	if err := row.Scan(&p.ID, &p.Title, &p.Theme, &p.Aspect, &p.Layout, &p.Version, &elements, &options, &p.TerminalProfile); err != nil {
 		return p, err
 	}
 	json.Unmarshal([]byte(elements), &p.Elements)
@@ -196,11 +198,20 @@ func (s *Service) SavePage(in Page) (Page, error) {
 	elements, _ := json.Marshal(in.Elements)
 	title := strings.TrimSpace(in.Title)
 	if in.ID == "" {
+		// A new page joins a profile (the default one when none is named), in its theme and aspect.
+		if in.TerminalProfile == "" {
+			in.TerminalProfile = defaultProfile
+		}
+		profile, err := s.terminalProfile(in.TerminalProfile)
+		if err != nil {
+			return Page{}, Invalid("unknown terminal profile")
+		}
+		in.Theme, in.Aspect = profile.Theme, profile.Aspect
 		raw := make([]byte, 10)
 		rand.Read(raw)
 		in.ID = strings.ToLower(base64.RawURLEncoding.EncodeToString(raw))
-		_, err := s.store.db.Exec(`INSERT INTO pages (id, title, theme, aspect, layout, version, elements, options)
-			VALUES (?, ?, ?, ?, ?, 1, ?, ?)`, in.ID, title, in.Theme, in.Aspect, in.Layout, string(elements), string(in.Options))
+		_, err = s.store.db.Exec(`INSERT INTO pages (id, title, theme, aspect, layout, version, elements, options, terminal_profile)
+			VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)`, in.ID, title, in.Theme, in.Aspect, in.Layout, string(elements), string(in.Options), in.TerminalProfile)
 		if err != nil {
 			return Page{}, err
 		}
@@ -213,8 +224,9 @@ func (s *Service) SavePage(in Page) (Page, error) {
 		return Page{}, err
 	case stored.Version != in.Version:
 		return Page{}, errPageStale
-	case in.Theme != stored.Theme || in.Aspect != stored.Aspect || in.Layout != stored.Layout:
-		return Page{}, Invalid("theme, aspect and layout are fixed at creation")
+	case in.Theme != stored.Theme || in.Aspect != stored.Aspect || in.Layout != stored.Layout ||
+		in.TerminalProfile != "" && in.TerminalProfile != stored.TerminalProfile:
+		return Page{}, Invalid("theme, aspect, layout and profile are fixed at creation")
 	}
 	res, err := s.store.db.Exec(`UPDATE pages SET title = ?, version = version + 1, elements = ?, options = ?
 		WHERE id = ? AND version = ?`, title, string(elements), string(in.Options), in.ID, in.Version)
@@ -233,6 +245,7 @@ func (s *Service) DeletePage(id string) error {
 	if n, _ := res.RowsAffected(); err != nil || n == 0 {
 		return ErrNotFound
 	}
+	s.store.db.Exec(`UPDATE terminal_profiles SET home_page = '' WHERE home_page = ?`, id)
 	s.configChanged("page.delete", id)
 	return nil
 }
@@ -267,6 +280,9 @@ type TerminalScreen struct {
 	Screen         string `json:"screen"`         // "" = detected
 	DetectedScreen string `json:"detectedScreen"` // reported by the app
 	HomePage       string `json:"homePage"`       // "" = the house's start page
+	// The profile the admin gave it ("" = the default one), and its owner (a phone's person, 0: none).
+	TerminalProfile string `json:"terminalProfile"`
+	Owner           int64  `json:"owner"`
 }
 
 // Screens are the sizes of terminal, smallest to largest (PLAN §5.4).
@@ -282,6 +298,8 @@ type InterfaceConfig struct {
 	Hidden    []string         `json:"hidden"`
 	Manual    []ManualThing    `json:"manual"`
 	Terminals []TerminalScreen `json:"terminals"`
+	// Terminal profiles, the default one first.
+	TerminalProfiles []TerminalProfile `json:"terminalProfiles"`
 }
 
 func (s *Service) Config() (InterfaceConfig, error) {
@@ -289,6 +307,9 @@ func (s *Service) Config() (InterfaceConfig, error) {
 		Terminals: []TerminalScreen{}}
 	var err error
 	if c.Pages, err = s.pages(); err != nil {
+		return c, err
+	}
+	if c.TerminalProfiles, err = s.terminalProfiles(); err != nil {
 		return c, err
 	}
 	s.store.db.QueryRow(`SELECT value FROM options WHERE key = 'homePage'`).Scan(&c.HomePage)
@@ -324,9 +345,9 @@ func (s *Service) Config() (InterfaceConfig, error) {
 			r.Scan(&m.ID, &m.URL)
 			c.Manual = append(c.Manual, m)
 		}),
-		query(`SELECT id, name, screen, detected_screen, home_page FROM terminals WHERE status = 'active' ORDER BY name`, func(r *sql.Rows) {
+		query(`SELECT id, name, screen, detected_screen, home_page, terminal_profile, coalesce(owner, 0) FROM terminals WHERE status = 'active' ORDER BY name`, func(r *sql.Rows) {
 			var t TerminalScreen
-			r.Scan(&t.ID, &t.Name, &t.Screen, &t.DetectedScreen, &t.HomePage)
+			r.Scan(&t.ID, &t.Name, &t.Screen, &t.DetectedScreen, &t.HomePage, &t.TerminalProfile, &t.Owner)
 			c.Terminals = append(c.Terminals, t)
 		}))
 }
@@ -412,14 +433,28 @@ func (s *Service) RemoveManual(id string) error {
 }
 
 // SetScreen is the admin's choice of screen and start page for a terminal.
-func (s *Service) SetScreen(id string, screen, homePage string) error {
+func (s *Service) SetScreen(id string, screen, homePage, profile string) error {
 	if screen != "" && !slices.Contains(screens, screen) {
 		return Invalid("unknown screen")
 	}
 	if err := s.knownPage(homePage); err != nil {
 		return err
 	}
-	res, _ := s.store.db.Exec(`UPDATE terminals SET screen = ?, home_page = ? WHERE id = ?`, screen, homePage, id)
+	// A profile only of the terminal's screen format (the one chosen, else detected).
+	if profile != "" {
+		p, err := s.terminalProfile(profile)
+		if err != nil {
+			return Invalid("unknown terminal profile")
+		}
+		effective := screen
+		if effective == "" {
+			s.store.db.QueryRow(`SELECT detected_screen FROM terminals WHERE id = ?`, id).Scan(&effective)
+		}
+		if p.Format != effective {
+			return Invalid("the profile is not for this terminal's screen")
+		}
+	}
+	res, _ := s.store.db.Exec(`UPDATE terminals SET screen = ?, home_page = ?, terminal_profile = ? WHERE id = ?`, screen, homePage, profile, id)
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}

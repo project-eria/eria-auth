@@ -141,12 +141,51 @@ func (s *Service) Handler() http.Handler {
 			h(w, r)
 		}
 	}
-	mux.HandleFunc("POST /v1/pages", pageEditor(handle(func(r *http.Request, in Page) (any, error) {
+	// A page: as above, or the owner of a terminal, for the profile given to it (pageWriter).
+	mux.HandleFunc("POST /v1/pages", handle(func(r *http.Request, in Page) (any, error) {
+		profile := in.TerminalProfile
+		if in.ID != "" {
+			stored, err := s.page(in.ID)
+			if err != nil {
+				return nil, err
+			}
+			profile = stored.TerminalProfile
+		} else if profile == "" {
+			profile = defaultProfile
+		}
+		if !s.pageWriter(bearer(r), isOut(r))(profile) {
+			return nil, ErrDenied
+		}
 		return s.SavePage(in)
-	})))
-	mux.HandleFunc("DELETE /v1/pages/{id}", pageEditor(func(w http.ResponseWriter, r *http.Request) {
-		reply(w, nil, s.DeletePage(r.PathValue("id")))
 	}))
+	mux.HandleFunc("DELETE /v1/pages/{id}", func(w http.ResponseWriter, r *http.Request) {
+		stored, err := s.page(r.PathValue("id"))
+		if err == nil && !s.pageWriter(bearer(r), isOut(r))(stored.TerminalProfile) {
+			err = ErrDenied
+		}
+		if err == nil {
+			err = s.DeletePage(stored.ID)
+		}
+		reply(w, nil, err)
+	})
+	// Terminal profiles: made, renamed and deleted by the admin (ERIA Admin);
+	// their start page also set by who may write their pages (pageWriter).
+	mux.HandleFunc("POST /v1/terminal-profiles", handle(func(r *http.Request, in TerminalProfile) (any, error) {
+		if _, err := s.asAdmin(bearer(r)); err != nil || isOut(r) {
+			stored, err := s.terminalProfile(in.ID)
+			if in.ID == "" || err != nil || strings.TrimSpace(in.Name) != stored.Name || !s.pageWriter(bearer(r), isOut(r))(in.ID) {
+				return nil, ErrDenied
+			}
+		}
+		return s.SaveTerminalProfile(in)
+	}))
+	mux.HandleFunc("DELETE /v1/terminal-profiles/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if _, err := s.asAdmin(bearer(r)); err != nil || isOut(r) {
+			reply(w, nil, ErrDenied)
+			return
+		}
+		reply(w, nil, s.DeleteTerminalProfile(r.PathValue("id")))
+	})
 	// The screen the app deduced, on any token of the terminal itself.
 	mux.HandleFunc("POST /v1/screen", handle(func(r *http.Request, in struct{ Screen string }) (any, error) {
 		c, err := s.authenticate(bearer(r), authz.Relay)
@@ -269,10 +308,11 @@ func (s *Service) Handler() http.Handler {
 		}))
 	}
 	mux.HandleFunc("PATCH /v1/terminals/{id}/screen", admin(handle(func(r *http.Request, in struct {
-		Screen   string
-		HomePage string
+		Screen          string
+		HomePage        string
+		TerminalProfile string
 	}) (any, error) {
-		return nil, s.SetScreen(r.PathValue("id"), in.Screen, in.HomePage)
+		return nil, s.SetScreen(r.PathValue("id"), in.Screen, in.HomePage, in.TerminalProfile)
 	})))
 	mux.HandleFunc("PUT /v1/config/home-page", pageEditor(handle(func(r *http.Request, in struct{ Page string }) (any, error) {
 		return nil, s.SetHomePage(in.Page)

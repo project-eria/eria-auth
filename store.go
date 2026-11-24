@@ -205,5 +205,8 @@ func OpenStore(path string) (*Store, error) {
 	if err := st.migrateConfig(); err != nil {
 		return nil, err
 	}
+	if err := st.migrateProfiles(); err != nil {
+		return nil, err
+	}
 	return st, nil
 }
