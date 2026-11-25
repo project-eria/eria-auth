@@ -419,6 +419,9 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/things/{id}", admin(func(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, s.ForgetThing(r.PathValue("id")))
 	}))
+	mux.HandleFunc("PUT /v1/things/{id}/setpoint-timeout", admin(handle(func(r *http.Request, seconds int) (any, error) {
+		return nil, s.SetSetpointTimeout(r.PathValue("id"), seconds)
+	})))
 	mux.HandleFunc("PUT /v1/things/{id}/zones", admin(handle(func(r *http.Request, zones []string) (any, error) {
 		return nil, s.SetZones(r.PathValue("id"), zones)
 	})))

@@ -46,6 +46,9 @@ type ThingRecord struct {
 	Effective    auth.Table        `json:"effective"`        // what the Thing gets now
 	States       map[string]States `json:"states,omitempty"` // overrides, by state then key
 	Groups       []GroupView       `json:"groups"`           // eria:groups of the last TD, with the admin's choices
+	// How long eria-ui-server keeps a set point the real state has not reached, in seconds
+	// (0 = its default, 30 s): a shutter's travel, a heater's ramp.
+	SetpointTimeout int `json:"setpointTimeout"`
 }
 
 // Rule is a requirement as stored: levels local, remote, outside (0 = None)
@@ -382,8 +385,8 @@ func jsonText(v any) string {
 func (s *Service) thing(id string) (ThingRecord, error) {
 	var t ThingRecord
 	var types, seen, funcs, zones, groups string
-	err := s.store.db.QueryRow(`SELECT id, title, types, seen_types, functions, zones, groups, adopted, seen, app FROM things WHERE id = ?`, id).
-		Scan(&t.ID, &t.Title, &types, &seen, &funcs, &zones, &groups, &t.Adopted, &t.Seen, &t.App)
+	err := s.store.db.QueryRow(`SELECT id, title, types, seen_types, functions, zones, groups, adopted, seen, app, setpoint_timeout FROM things WHERE id = ?`, id).
+		Scan(&t.ID, &t.Title, &types, &seen, &funcs, &zones, &groups, &t.Adopted, &t.Seen, &t.App, &t.SetpointTimeout)
 	if errors.Is(err, sql.ErrNoRows) {
 		return t, ErrNotFound
 	}
@@ -515,6 +518,27 @@ func (s *Service) ForgetThing(id string) error {
 	s.store.db.Exec(`DELETE FROM rules WHERE thing = ?`, id)
 	s.store.db.Exec(`DELETE FROM group_rules WHERE thing = ?`, id)
 	s.store.log("thing.forget", id)
+	return nil
+}
+
+// MaxSetpointTimeout bounds the set point delay of a Thing (seconds).
+const MaxSetpointTimeout = 3600
+
+// SetSetpointTimeout sets how long eria-ui-server keeps a set point of the Thing
+// (seconds, 0 = its default); the interfaces' config carries it.
+func (s *Service) SetSetpointTimeout(id string, seconds int) error {
+	if seconds < 0 || seconds > MaxSetpointTimeout {
+		return Invalid("set point delay: 0 to 3600 s")
+	}
+	res, err := s.store.db.Exec(`UPDATE things SET setpoint_timeout = ? WHERE id = ?`, seconds, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	s.store.log("thing.setpoint", fmt.Sprintf("%s %ds", id, seconds))
+	s.bumpConfig()
 	return nil
 }
 

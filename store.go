@@ -175,7 +175,8 @@ func OpenStore(path string) (*Store, error) {
 		db.Exec(`ALTER TABLE journal ADD COLUMN ` + col + ` TEXT NOT NULL DEFAULT ''`)
 	}
 	db.Exec(`ALTER TABLE journal ADD COLUMN keep INTEGER NOT NULL DEFAULT 365`)
-	db.Exec(`ALTER TABLE things ADD COLUMN groups TEXT NOT NULL DEFAULT '[]'`) // eria:groups of the last TD
+	db.Exec(`ALTER TABLE things ADD COLUMN groups TEXT NOT NULL DEFAULT '[]'`)           // eria:groups of the last TD
+	db.Exec(`ALTER TABLE things ADD COLUMN setpoint_timeout INTEGER NOT NULL DEFAULT 0`) // seconds, 0 = eria-ui-server's default
 	// A group's rule set by the admin (§2.4, groups): its members got it;
 	// the others of the group wait (pending) unless declined.
 	db.Exec(`CREATE TABLE IF NOT EXISTS group_rules (

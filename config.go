@@ -300,11 +300,13 @@ type InterfaceConfig struct {
 	Terminals []TerminalScreen `json:"terminals"`
 	// Terminal profiles, the default one first.
 	TerminalProfiles []TerminalProfile `json:"terminalProfiles"`
+	// Set point delays chosen by the admin, in seconds, by Thing (only those set).
+	SetpointTimeouts map[string]int `json:"setpointTimeouts"`
 }
 
 func (s *Service) Config() (InterfaceConfig, error) {
 	c := InterfaceConfig{Version: s.configVersion(), Contexts: []Context{}, Levels: []Level{}, Hidden: []string{}, Manual: []ManualThing{},
-		Terminals: []TerminalScreen{}}
+		Terminals: []TerminalScreen{}, SetpointTimeouts: map[string]int{}}
 	var err error
 	if c.Pages, err = s.pages(); err != nil {
 		return c, err
@@ -349,6 +351,12 @@ func (s *Service) Config() (InterfaceConfig, error) {
 			var t TerminalScreen
 			r.Scan(&t.ID, &t.Name, &t.Screen, &t.DetectedScreen, &t.HomePage, &t.TerminalProfile, &t.Owner)
 			c.Terminals = append(c.Terminals, t)
+		}),
+		query(`SELECT id, setpoint_timeout FROM things WHERE setpoint_timeout > 0`, func(r *sql.Rows) {
+			var id string
+			var seconds int
+			r.Scan(&id, &seconds)
+			c.SetpointTimeouts[id] = seconds
 		}))
 }
 
