@@ -25,6 +25,26 @@ type TerminalProfile struct {
 	Theme    string `json:"theme"`    // "" = Base; fixed at creation
 	Aspect   string `json:"aspect"`   // fixed at creation
 	HomePage string `json:"homePage"` // one of its pages, "" = its first
+	// What its terminals are for (CONTEXT-PAGES-DESIGN §4.1): personal (a person's phone), room,
+	// shared (the hall's wall tablet), task; set by the admin, by default from the format.
+	Role string `json:"role"`
+}
+
+// profileRoles are the roles of a terminal profile.
+var profileRoles = []string{"personal", "room", "shared", "task"}
+
+// roleOf is a profile's role: the one set, else the default of its format.
+func roleOf(role, format string) string {
+	if role != "" {
+		return role
+	}
+	switch format {
+	case "phone":
+		return "personal"
+	case "wall-tablet", "tv":
+		return "shared"
+	}
+	return "room"
 }
 
 const defaultProfile = "default"
@@ -52,6 +72,13 @@ func (s *Store) migrateProfiles() error {
 			}
 		}
 	}
+	var hasRole int
+	s.db.QueryRow(`SELECT count(*) FROM pragma_table_info('terminal_profiles') WHERE name = 'role'`).Scan(&hasRole)
+	if hasRole == 0 {
+		if _, err := s.db.Exec(`ALTER TABLE terminal_profiles ADD COLUMN role TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
 	// The default profile, made once from what there was: every page, the
 	// house's start page, and the theme and aspect of that page (else of the first).
 	var n int
@@ -73,12 +100,13 @@ func (s *Store) migrateProfiles() error {
 
 func scanProfile(row interface{ Scan(...any) error }) (TerminalProfile, error) {
 	var p TerminalProfile
-	err := row.Scan(&p.ID, &p.Name, &p.Format, &p.Theme, &p.Aspect, &p.HomePage)
+	err := row.Scan(&p.ID, &p.Name, &p.Format, &p.Theme, &p.Aspect, &p.HomePage, &p.Role)
+	p.Role = roleOf(p.Role, p.Format)
 	return p, err
 }
 
 func (s *Service) terminalProfile(id string) (TerminalProfile, error) {
-	p, err := scanProfile(s.store.db.QueryRow(`SELECT id, name, format, theme, aspect, home_page FROM terminal_profiles WHERE id = ?`, id))
+	p, err := scanProfile(s.store.db.QueryRow(`SELECT id, name, format, theme, aspect, home_page, role FROM terminal_profiles WHERE id = ?`, id))
 	if err != nil {
 		return p, ErrNotFound
 	}
@@ -87,7 +115,7 @@ func (s *Service) terminalProfile(id string) (TerminalProfile, error) {
 
 // terminalProfiles lists them, the default one first.
 func (s *Service) terminalProfiles() ([]TerminalProfile, error) {
-	rows, err := s.store.db.Query(`SELECT id, name, format, theme, aspect, home_page FROM terminal_profiles
+	rows, err := s.store.db.Query(`SELECT id, name, format, theme, aspect, home_page, role FROM terminal_profiles
 		ORDER BY id != ?, name`, defaultProfile)
 	if err != nil {
 		return nil, err
@@ -111,6 +139,9 @@ func (s *Service) SaveTerminalProfile(in TerminalProfile) (TerminalProfile, erro
 	if name == "" || len(name) > maxPageTitle {
 		return TerminalProfile{}, Invalid("a name is needed (100 characters at most)")
 	}
+	if in.Role != "" && !slices.Contains(profileRoles, in.Role) {
+		return TerminalProfile{}, Invalid("unknown role")
+	}
 	if in.ID == "" {
 		if !slices.Contains(profileFormats, in.Format) {
 			return TerminalProfile{}, Invalid("unknown format")
@@ -118,8 +149,8 @@ func (s *Service) SaveTerminalProfile(in TerminalProfile) (TerminalProfile, erro
 		raw := make([]byte, 10)
 		rand.Read(raw)
 		in.ID = strings.ToLower(base64.RawURLEncoding.EncodeToString(raw))
-		if _, err := s.store.db.Exec(`INSERT INTO terminal_profiles (id, name, format, theme, aspect, home_page) VALUES (?, ?, ?, ?, ?, '')`,
-			in.ID, name, in.Format, in.Theme, in.Aspect); err != nil {
+		if _, err := s.store.db.Exec(`INSERT INTO terminal_profiles (id, name, format, theme, aspect, home_page, role) VALUES (?, ?, ?, ?, ?, '', ?)`,
+			in.ID, name, in.Format, in.Theme, in.Aspect, in.Role); err != nil {
 			return TerminalProfile{}, err
 		}
 		s.configChanged("profile.create", in.ID)
@@ -137,7 +168,11 @@ func (s *Service) SaveTerminalProfile(in TerminalProfile) (TerminalProfile, erro
 			return TerminalProfile{}, Invalid("the start page must be a page of the profile")
 		}
 	}
-	s.store.db.Exec(`UPDATE terminal_profiles SET name = ?, home_page = ? WHERE id = ?`, name, in.HomePage, in.ID)
+	role := in.Role
+	if role == "" {
+		role = stored.Role
+	}
+	s.store.db.Exec(`UPDATE terminal_profiles SET name = ?, home_page = ?, role = ? WHERE id = ?`, name, in.HomePage, role, in.ID)
 	s.configChanged("profile.update", in.ID)
 	return s.terminalProfile(in.ID)
 }

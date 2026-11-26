@@ -173,7 +173,8 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/terminal-profiles", handle(func(r *http.Request, in TerminalProfile) (any, error) {
 		if _, err := s.asAdmin(bearer(r)); err != nil || isOut(r) {
 			stored, err := s.terminalProfile(in.ID)
-			if in.ID == "" || err != nil || strings.TrimSpace(in.Name) != stored.Name || !s.pageWriter(bearer(r), isOut(r))(in.ID) {
+			if in.ID == "" || err != nil || strings.TrimSpace(in.Name) != stored.Name || (in.Role != "" && in.Role != stored.Role) ||
+				!s.pageWriter(bearer(r), isOut(r))(in.ID) {
 				return nil, ErrDenied
 			}
 		}
