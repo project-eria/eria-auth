@@ -49,6 +49,14 @@ func TestTerminalProfiles(t *testing.T) {
 	assert.Equal(t, 400, h.call("PATCH", "/v1/terminals/"+h.pcID(pc)+"/screen", admin, map[string]string{"terminalProfile": phone.ID}, nil),
 		"a phone profile on a desktop screen")
 	require.Equal(t, 200, h.call("PATCH", "/v1/terminals/"+h.pcID(pc)+"/screen", admin, map[string]string{"screen": "phone", "terminalProfile": phone.ID}, nil))
+
+	// Its own aspect (a lighter one for a slow terminal), read back by the relays; a malformed id is refused.
+	assert.Equal(t, 400, h.call("PATCH", "/v1/terminals/"+h.pcID(pc)+"/screen", admin, map[string]string{"screen": "phone", "terminalProfile": phone.ID, "aspect": "../x"}, nil))
+	require.Equal(t, 200, h.call("PATCH", "/v1/terminals/"+h.pcID(pc)+"/screen", admin, map[string]string{"screen": "phone", "terminalProfile": phone.ID, "aspect": "nuit-sobre"}, nil))
+	require.Equal(t, 200, h.call("GET", "/v1/config", "", nil, &c))
+	require.Len(t, c.Terminals, 1)
+	assert.Equal(t, "nuit-sobre", c.Terminals[0].Aspect)
+
 	require.Equal(t, 200, h.call("POST", "/v1/pages", child, mine, &mine))
 	assert.Equal(t, 403, h.call("POST", "/v1/pages", child, home, nil), "another profile")
 	renamed := phone

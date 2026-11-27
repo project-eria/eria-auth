@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -41,7 +42,7 @@ func (s *Store) migrateConfig() error {
 		return err
 	}
 	// The screen of a terminal (watch, phone, tablet…), apart from its kind.
-	for _, column := range []string{"screen", "detected_screen", "home_page"} {
+	for _, column := range []string{"screen", "detected_screen", "home_page", "aspect"} {
 		var n int
 		s.db.QueryRow(`SELECT count(*) FROM pragma_table_info('terminals') WHERE name = ?`, column).Scan(&n)
 		if n == 0 {
@@ -283,6 +284,9 @@ type TerminalScreen struct {
 	// The profile the admin gave it ("" = the default one), and its owner (a phone's person, 0: none).
 	TerminalProfile string `json:"terminalProfile"`
 	Owner           int64  `json:"owner"`
+	// The aspect of its theme the admin chose for it ("" = the pages' own): a slow
+	// terminal may take a lighter one without copying its pages.
+	Aspect string `json:"aspect"`
 }
 
 // Screens are the sizes of terminal, smallest to largest (PLAN §5.4).
@@ -347,9 +351,9 @@ func (s *Service) Config() (InterfaceConfig, error) {
 			r.Scan(&m.ID, &m.URL)
 			c.Manual = append(c.Manual, m)
 		}),
-		query(`SELECT id, name, screen, detected_screen, home_page, terminal_profile, coalesce(owner, 0) FROM terminals WHERE status = 'active' ORDER BY name`, func(r *sql.Rows) {
+		query(`SELECT id, name, screen, detected_screen, home_page, terminal_profile, coalesce(owner, 0), aspect FROM terminals WHERE status = 'active' ORDER BY name`, func(r *sql.Rows) {
 			var t TerminalScreen
-			r.Scan(&t.ID, &t.Name, &t.Screen, &t.DetectedScreen, &t.HomePage, &t.TerminalProfile, &t.Owner)
+			r.Scan(&t.ID, &t.Name, &t.Screen, &t.DetectedScreen, &t.HomePage, &t.TerminalProfile, &t.Owner, &t.Aspect)
 			c.Terminals = append(c.Terminals, t)
 		}),
 		query(`SELECT id, setpoint_timeout FROM things WHERE setpoint_timeout > 0`, func(r *sql.Rows) {
@@ -440,10 +444,18 @@ func (s *Service) RemoveManual(id string) error {
 	return nil
 }
 
-// SetScreen is the admin's choice of screen and start page for a terminal.
-func (s *Service) SetScreen(id string, screen, homePage, profile string) error {
+// aspectID is the shape of an aspect id of a theme (nuit, ardoise-dark…).
+var aspectID = regexp.MustCompile(`^[a-z0-9-]{0,64}$`)
+
+// SetScreen is the admin's choice of screen, start page, profile and aspect for
+// a terminal. The aspect is not checked against the themes (auth does not know
+// them): the app falls back to the page's own when the theme has no such aspect.
+func (s *Service) SetScreen(id string, screen, homePage, profile, aspect string) error {
 	if screen != "" && !slices.Contains(screens, screen) {
 		return Invalid("unknown screen")
+	}
+	if !aspectID.MatchString(aspect) {
+		return Invalid("invalid aspect")
 	}
 	if err := s.knownPage(homePage); err != nil {
 		return err
@@ -462,7 +474,7 @@ func (s *Service) SetScreen(id string, screen, homePage, profile string) error {
 			return Invalid("the profile is not for this terminal's screen")
 		}
 	}
-	res, _ := s.store.db.Exec(`UPDATE terminals SET screen = ?, home_page = ?, terminal_profile = ? WHERE id = ?`, screen, homePage, profile, id)
+	res, _ := s.store.db.Exec(`UPDATE terminals SET screen = ?, home_page = ?, terminal_profile = ?, aspect = ? WHERE id = ?`, screen, homePage, profile, aspect, id)
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}

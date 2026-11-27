@@ -312,8 +312,9 @@ func (s *Service) Handler() http.Handler {
 		Screen          string
 		HomePage        string
 		TerminalProfile string
+		Aspect          string
 	}) (any, error) {
-		return nil, s.SetScreen(r.PathValue("id"), in.Screen, in.HomePage, in.TerminalProfile)
+		return nil, s.SetScreen(r.PathValue("id"), in.Screen, in.HomePage, in.TerminalProfile, in.Aspect)
 	})))
 	mux.HandleFunc("PUT /v1/config/home-page", pageEditor(handle(func(r *http.Request, in struct{ Page string }) (any, error) {
 		return nil, s.SetHomePage(in.Page)
